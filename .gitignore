@@ -20,3 +20,6 @@ Thumbs.db
 site_backup_before_rebuild/
 screenshots/
 present/
+
+# Packages handed to the team (e.g. the presentation zip) are built locally and never committed.
+*.zip
