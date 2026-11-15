@@ -58,7 +58,7 @@ function run(withMap) {
   const data = window.SITE_DATA, T = window.SJV_TRUST;
   let states = 0;
   const WATCH = ['results', 'legend', 'detail', 'picker', 'layerRow', 'stepBox', 'impact', 'placeTitle', 'statusChip', 'placeCaveat', 'siteStatus', 'measureNote', 'trustDetail', 'steps',
-    'freshUsed', 'freshState', 'freshTimeline', 'freshLive', 'worldImpact', 'worldCard', 'worldLegend', 'worldList', 'worldNotes', 'worldTitle', 'stepNotes', 'tourCaption', 'headline'];
+    'freshUsed', 'freshState', 'freshTimeline', 'freshLive', 'trackNote', 'worldImpact', 'worldCard', 'worldLegend', 'worldList', 'worldNotes', 'worldTitle', 'stepNotes', 'tourCaption', 'headline'];
   function expectClean(what) {
     for (const id of WATCH) {
       const hit = html(id).match(/.{0,60}(undefined|NaN|\[object).{0,40}/);
@@ -72,8 +72,14 @@ function run(withMap) {
   const home = () => mode() === 'site' && /San Joaquin/.test(el('placeKicker').textContent) && /170,900/.test(html('stepBox')) && /at least/.test(html('stepBox')) && el('shadeToggle').checked === true;
   must(!!G && document.documentElement.getAttribute('data-ready') === '1', 'the app did not finish starting');
   must(home(), 'the explorer must open on San Joaquin Valley: confirmed map, conservative floor');
-  must(/farmland: filtered out/.test(html('legend')), 'the legend must mark filtered-out farmland while the filter is on');
-  must(!/24 GPS station/.test(html('statusChip')) && /crop signal filtered out/.test(html('statusChip')), 'San Joaquin status label must say the crop signal is filtered out, and not imply farmland is validated');
+  const tip = id => String(el(id).getAttribute('data-tip') || '');
+  must(/>farmland, not counted</.test(html('legend')) && /never counted/.test(html('legend')), 'the legend must mark filtered-out farmland while the filter is on, with the explanation in its tooltip');
+  must(/Checked/.test(html('statusChip')) && !/24 GPS station/.test(tip('statusChip')) && /Crop signal filtered out: farmland is never counted/.test(tip('statusChip')), 'San Joaquin status badge: its tooltip must say the crop signal is filtered out, and not imply farmland is validated');
+  must(/Farmland is filtered out and never counted/.test(html('stepBox')), 'the farmland exclusion must be one interaction away from the headline figure (info tooltip)');
+  const ovWords = t => t.replace(/<[^>]+>/g, ' ').trim().split(/\s+/).length, ov = html('stepBox');
+  must(ovWords(ov.split('<section class="ov-card"')[0]) <= 12, 'the key figure must be a number and a few words');
+  must(/Checked against GPS/.test(ov) && /Why farmland is faint/.test(ov) && /data-go="gps"/.test(ov) && /data-go="crops"/.test(ov), 'the overview must show the GPS check and the farmland card, each opening its full view');
+  must(ovWords(ov) <= 70, 'the overview must stay short: ' + ovWords(ov) + ' words');
   must(G.state() === 'p=sjv', 'default share state should be just the place, got ' + G.state());
   const key = k => docKeys.forEach(fn => fn({ key: k, target: { tagName: 'BODY' }, preventDefault() {}, stopPropagation() {} }));
   key('ArrowRight'); must(home(), 'arrow keys must do nothing outside the tour');
@@ -135,9 +141,9 @@ function run(withMap) {
     handlers.length = 0;
     G.apply('#p=' + id);
     expectClean(id + ' initial');
-    must(el('placeTitle').innerHTML.length > 10 && el('statusChip').textContent.length > 5, id + ': no headline or status label');
+    must(el('placeKicker').textContent.length > 3 && /Checked|Unchecked/.test(el('statusChip').innerHTML), id + ': no place title or status badge');
     const entry = (window.OBSERVATORY || []).find(e => e.id === id);
-    if (entry && entry.status === 'measured') must(/crop areas may need filtering/.test(el('placeCaveat').textContent) && el('placeCaveat').hidden === false, id + ': unchecked place without the crop caveat');
+    if (entry && entry.status === 'measured') must(/Unchecked/.test(el('statusChip').innerHTML) && /not yet checked against GPS/.test(tip('statusChip')) && /crop areas may need filtering/.test(tip('statusChip')), id + ': unchecked place without a visible status and the crop caveat in its tooltip');
     must(el('steps').children.length >= 1, id + ': no step buttons');
     el('steps').children.slice().forEach(b => { b.fire('click'); expectClean(id + ' step ' + b.getAttribute('data-step')); });
     el('more').open = true; el('more').fire('toggle'); expectClean(id + ' details');

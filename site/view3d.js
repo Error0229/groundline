@@ -105,8 +105,9 @@
       }
       return out;
     },
-    /* The filtered surface: 5x5-cell median, then 3x3-cell mean. */
-    clean: function (vals, valid, W, H) { return math.mean(math.median(vals, valid, W, H, 2), valid, W, H, 1); },
+    /* The display surface: 5x5-cell median, then a 5x5 and a 3x3 mean, so bowls are smooth shapes rather than spikes.
+       Readings on click come from the unsmoothed grid. */
+    clean: function (vals, valid, W, H) { return math.mean(math.mean(math.median(vals, valid, W, H, 2), valid, W, H, 2), valid, W, H, 1); },
     lonOf: function (x, sc) { return (sc.west + sc.east) / 2 + x * sc.kmPerUnit / (111.32 * Math.cos(sc.mid * Math.PI / 180)); },
     latOf: function (z, sc) { return sc.mid - z * sc.kmPerUnit / 110.95; },
     /* Terrarium-encoded elevation in metres (AWS Terrain Tiles). */
@@ -147,12 +148,12 @@
       if (finished) return;
       finished = true; clearTimeout(timer);
       if (reason) { done(null, reason); return; }
-      if (failed > plan.count / (maxTiles ? 8 : 2)) { done(null, failed + ' of ' + plan.count + ' tiles failed to load'); return; }   // elevation needs nearly all tiles
+      if (maxTiles ? failed > plan.count / 8 : failed > 0) { done(null, failed + ' of ' + plan.count + ' tiles failed to load'); return; }   // imagery with holes is not used
       try { ctx.getImageData(0, 0, 1, 1); } catch (e) { done(null, 'the tile canvas is tainted (tiles served without CORS): ' + e.message); return; }
       imageryCache[key] = c;
       done(c);
     }
-    var timer = setTimeout(function () { finish(left > plan.count / 2 ? 'imagery tiles timed out' : null); }, 20000);
+    var timer = setTimeout(function () { finish(left > 0 ? 'imagery tiles timed out' : null); }, 20000);
     for (var ty = plan.t0[1]; ty <= plan.t1[1]; ty++) for (var tx = plan.t0[0]; tx <= plan.t1[0]; tx++) (function (tx, ty) {
       var im = new Image();
       im.crossOrigin = 'anonymous';
@@ -204,20 +205,33 @@
   // extra darkness with depth, so that bowls read as dips rather than mesas.
   var VERT = [
     'attribute vec4 tint;',
-    'varying vec2 vUv; varying vec4 vTint; varying vec3 vN; varying float vH;',
+    'varying vec2 vUv; varying vec4 vTint; varying vec3 vN; varying float vH; varying vec3 vP;',
     'void main() {',
-    '  vUv = uv; vTint = tint; vN = normal; vH = position.y;',
+    '  vUv = uv; vTint = tint; vN = normal; vH = position.y; vP = position;',
     '  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);',
     '}'].join('\n');
+  // The imagery is only a dim, half-grey context layer. The change colour sits on it at full strength (tint.a up to 1).
+  // tint.a above 1 marks cells that are filtered out (farmland): their quick-map colour is shown faint and greyed under fine
+  // diagonal lines, like the 2D map, so the shape of the whole valley stays visible while only checked ground has depth.
+  // Thin contour lines below the zero level make depth readable from any angle.
   var FRAG = [
-    'uniform sampler2D map; uniform float useMap; uniform vec3 base; uniform vec3 sun; uniform float depthRef;',
-    'varying vec2 vUv; varying vec4 vTint; varying vec3 vN; varying float vH;',
+    'uniform sampler2D map; uniform float useMap; uniform vec3 base; uniform vec3 sun; uniform float depthRef; uniform float contour;',
+    'varying vec2 vUv; varying vec4 vTint; varying vec3 vN; varying float vH; varying vec3 vP;',
     'void main() {',
-    '  vec3 c = useMap > 0.5 ? texture2D(map, vUv).rgb : base;',
-    '  c = mix(c, vTint.rgb, vTint.a);',
-    '  float l = 0.68 + 0.5 * max(dot(normalize(vN), sun), 0.0);',
-    '  l *= 1.0 - 0.32 * clamp(-vH / depthRef, 0.0, 1.0);',
-    '  gl_FragColor = vec4(c * l, 1.0);',
+    '  vec3 img = useMap > 0.5 ? texture2D(map, vUv).rgb : base;',
+    '  vec3 c = mix(vec3(dot(img, vec3(0.299, 0.587, 0.114))), img, 0.5) * (useMap > 0.5 ? 0.5 : 1.0);',
+    '  float ghost = step(1.0, vTint.a);',
+    '  float a = ghost > 0.5 ? 0.42 * clamp(vTint.a - 1.0, 0.0, 1.0) : vTint.a;',
+    '  vec3 tc = mix(vec3(dot(vTint.rgb, vec3(0.299, 0.587, 0.114))), vTint.rgb, 1.0 - 0.45 * ghost);',
+    '  c = mix(c, tc, a);',
+    '  float stripe = step(0.74, fract((vP.x + vP.z) * 1.5));',
+    '  c = mix(c, vec3(0.62, 0.69, 0.84), ghost * stripe * 0.5);',
+    '  float l = 0.76 + 0.4 * max(dot(normalize(vN), sun), 0.0);',
+    '  l *= 1.0 - 0.2 * clamp(-vH / depthRef, 0.0, 1.0);',
+    '  float g = vH / contour;',
+    '  float d = abs(fract(g - 0.5) - 0.5) / max(fwidth(g), 0.00001);',
+    '  float line = (1.0 - smoothstep(0.5, 1.4, d)) * step(vH, -0.03);',
+    '  gl_FragColor = vec4(c * l * (1.0 - 0.34 * line), 1.0);',
     '}'].join('\n');
 
   function supported() {
@@ -246,8 +260,8 @@
     scene.add(group);
 
     var reduced = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
-    var HOME = { theta: -0.45, phi: 1.02, radius: 150 }, orbit = { theta: HOME.theta, phi: HOME.phi, radius: HOME.radius };
-    var S = null, mult = 1, flatten = true, pending = false, tween = null, labels = [], built = [], ink = '#1d1b17', vec = new T.Vector3();
+    var HOME = { theta: -0.5, phi: 0.92, radius: 150 }, orbit = { theta: HOME.theta, phi: HOME.phi, radius: HOME.radius };
+    var S = null, mult = 1, flatten = true, pending = false, tween = null, labels = [], markerEls = [], rects = [], built = [], ink = '#1d1b17', vec = new T.Vector3();
     function add(o) { group.add(o); built.push(o); return o; }
 
     function css(name, fallback) {
@@ -262,7 +276,8 @@
       if (S && S.tex) S.tex.dispose();
       built = [];
       labels.forEach(function (l) { labelHost.removeChild(l.el); });
-      labels = [];
+      markerEls.forEach(function (el) { labelHost.removeChild(el); });
+      labels = []; markerEls = [];
       var g = site.grid, sc = math.scene(site.bounds), W = g.width, H = g.height, n = W * H, lastFrame = site.frames[site.frames.length - 1];
       S = { site: site, grid: g, sc: sc, n: n, pos: new Float32Array(n * 3), col: new Float32Array(n * 4), nor: new Float32Array(n * 3), uv: new Float32Array(n * 2), hasMap: false,
         valid: new Uint8Array(n), cur: new Float32Array(n), shown: new Float32Array(n), values: {}, smooth: {}, date: 0,
@@ -291,9 +306,13 @@
       geom.setAttribute('position', S.aPos); geom.setAttribute('tint', S.aCol); geom.setAttribute('normal', S.aNor); geom.setAttribute('uv', new T.BufferAttribute(S.uv, 2));
       S.idxData = new T.BufferAttribute(n > 65535 ? new Uint32Array(index) : new Uint16Array(index), 1);
       S.idxAll = new T.BufferAttribute(n > 65535 ? new Uint32Array(indexAll) : new Uint16Array(indexAll), 1);   // terrain mode: the whole rectangle
-      geom.setIndex(mode === 'terrain' ? S.idxAll : S.idxData);
+      geom.setIndex(S.idxAll);   // the whole rectangle in both modes: cells without data show the imagery, never a hole
       S.mat = new T.ShaderMaterial({ vertexShader: VERT, fragmentShader: FRAG, side: T.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1,
-        uniforms: { map: { value: null }, useMap: { value: 0 }, base: { value: new T.Color(247 / 255, 247 / 255, 247 / 255) }, sun: { value: SUN }, depthRef: { value: 1 } } });
+        extensions: { derivatives: true },
+        uniforms: { map: { value: null }, useMap: { value: 0 }, base: { value: new T.Color(0.11, 0.15, 0.26) }, sun: { value: SUN }, depthRef: { value: 1 }, contour: { value: 1 } } });
+      // smoothing never mixes in cells that are filtered out
+      S.smask = S.valid;
+      if (site.dim) { S.smask = new Uint8Array(n); for (k = 0; k < n; k++) S.smask[k] = S.valid[k] && site.dim[k] === 1 ? 1 : 0; }
       var surface = new T.Mesh(geom, S.mat);
       surface.frustumCulled = false;
       add(surface); S.surface = surface;
@@ -306,7 +325,7 @@
       lines.push(-hw, 0, -hd, hw, 0, -hd, hw, 0, -hd, hw, 0, hd, hw, 0, hd, -hw, 0, hd, -hw, 0, hd, -hw, 0, -hd);
       var lg = new T.BufferGeometry();
       lg.setAttribute('position', new T.BufferAttribute(new Float32Array(lines), 3));
-      S.zeroLines = new T.LineSegments(lg, new T.LineBasicMaterial({ color: ink, transparent: true, opacity: 0.22 }));
+      S.zeroLines = new T.LineSegments(lg, new T.LineBasicMaterial({ color: ink, transparent: true, opacity: 0.3 }));
       add(S.zeroLines);
       S.zeroSheet = new T.Mesh(new T.PlaneGeometry(sc.w, sc.d), new T.MeshBasicMaterial({ color: ink, transparent: true, opacity: 0.05, depthWrite: false, side: T.DoubleSide }));
       S.zeroSheet.rotation.x = -Math.PI / 2;
@@ -341,13 +360,15 @@
       // GPS stations as pins; places and (when there are few) station names as labels
       var few = (site.gps || []).length <= 3;
       (site.gps || []).forEach(function (st) {
-        // drawn after the surface without a depth test, so a steep hill in front never hides a station
-        var pin = new T.Mesh(new T.SphereGeometry(0.85, 14, 10), new T.MeshBasicMaterial({ color: 0xffffff, depthTest: false }));
-        var rim = new T.Mesh(new T.SphereGeometry(1.15, 14, 10), new T.MeshBasicMaterial({ color: ink, side: T.BackSide, depthTest: false }));
-        rim.renderOrder = 10; pin.renderOrder = 11;
-        var o = { x: math.xOf(st.lon, sc), z: math.zOf(st.lat, sc), cell: math.cellOf(st.lon, st.lat, g, sc), meshes: [pin, rim], y: 0,
-          pick: { type: 'gps', id: st.id } };
-        add(pin); add(rim); S.pins.push(o);
+        var o = { x: math.xOf(st.lon, sc), z: math.zOf(st.lat, sc), cell: math.cellOf(st.lon, st.lat, g, sc), meshes: [], y: 0, pick: { type: 'gps', id: st.id } };
+        var el = document.createElement('button'), val = null, c = [0, 0, 0], q;
+        for (q = (st.gps_cm || []).length - 1; q >= 0 && val == null; q--) if (st.gps_cm[q] != null) val = st.gps_cm[q];
+        if (val != null) { math.colour(val, site.vmax, c, 0); el.style.background = 'rgb(' + Math.round(c[0] * 255) + ',' + Math.round(c[1] * 255) + ',' + Math.round(c[2] * 255) + ')'; }
+        var tip = 'GPS ' + st.id + (val == null ? '' : ': ' + (val > 0 ? '+' : val < 0 ? '\u2212' : '') + Math.abs(val).toFixed(1) + ' cm');
+        el.type = 'button'; el.className = 'm3'; el.setAttribute('data-tip', tip); el.setAttribute('aria-label', tip);
+        el.addEventListener('click', function () { if (onPick) onPick(o.pick); });
+        labelHost.appendChild(el); markerEls.push(el);
+        o.el = el; S.pins.push(o);
         if (few) addLabel('GPS ' + st.id, o, 1.8);
       });
       (site.places || []).forEach(function (p) {
@@ -384,7 +405,7 @@
           tex.wrapS = tex.wrapT = T.ClampToEdgeWrapping;
           tex.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy ? renderer.capabilities.getMaxAnisotropy() : 1);
           S.mat.uniforms.map.value = tex; S.mat.uniforms.useMap.value = 1; S.hasMap = true; S.tex = tex;
-          S.zeroLines.material.opacity = 0.14; S.zeroSheet.material.opacity = 0.025;
+          S.zeroLines.material.opacity = 0.26; S.zeroSheet.material.opacity = 0.03;
           S.credits.img = site.imagery.credit; showCredits();
           apply();
           if (S.onImagery) S.onImagery();
@@ -420,23 +441,30 @@
         S.values[i] = out;
       }
       if (!flatten) return S.values[i];
-      return S.smooth[i] || (S.smooth[i] = math.clean(S.values[i], S.valid, S.grid.width, S.grid.height));
+      return S.smooth[i] || (S.smooth[i] = math.clean(S.values[i], S.smask, S.grid.width, S.grid.height));
     }
 
     // ---- heights, colours and normals from the current values
     function apply() {
       var g = S.grid, W = g.width, H = g.height, u = math.unitsPerCm(S.times0 * mult, S.sc), noise = S.site.noise, vmax = S.site.vmax, k, v;
-      var terrain = mode === 'terrain', mask = terrain ? S.all : S.valid, perM = TERRAIN0 * mult / (S.sc.kmPerUnit * 1000);
-      var dim = S.site.dim;                                    // optional: cells not counted (class above 1) are drawn grey
+      var terrain = mode === 'terrain', mask = S.all, perM = TERRAIN0 * mult / (S.sc.kmPerUnit * 1000);
+      var dim = S.site.dim, raw = dim && S.values[S.date];     // optional: cells not counted (class above 1) are drawn faint, hatched and flat
       for (k = 0; k < S.n; k++) {
-        v = S.cur[k] * math.weight(S.cur[k], noise, flatten);  // inside the noise band: flattened and colourless
-
+        if (!terrain && !S.valid[k]) { S.shown[k] = 0; S.pos[3 * k + 1] = 0; S.col[4 * k + 3] = 0; continue; }   // no data: imagery only, on the zero level, like the 2D map
+        var out = dim && dim[k] > 1;                           // filtered out: flat on the reference plane, never drawn as sinking
+        v = out ? 0 : S.cur[k] * math.weight(S.cur[k], noise, flatten);  // inside the noise band: flat and colourless
         S.shown[k] = v;
         if (terrain) S.pos[3 * k + 1] = S.elev ? (S.elev[k] - S.elevBase) * perM : 0;   // real relief; change shown by colour only
         else S.pos[3 * k + 1] = (v > 0 && flatten && !S.site.upliftConfirmed ? 0 : v) * u;   // rise no GPS confirms: colour only
+        if (out) {                                             // farmland: the quick map's colour, faint (the shader greys it and adds lines)
+          var q = raw ? raw[k] : 0, aq = q < 0 ? -q : q;
+          math.colour(q, vmax, S.col, 4 * k);
+          S.col[4 * k + 3] = dim[k] === 2 && S.valid[k] ? 1 + (aq <= (noise || 0) ? 0 : Math.min(1, aq / (0.5 * vmax))) : 0;
+          continue;
+        }
         math.colour(v, vmax, S.col, 4 * k);
-        S.col[4 * k + 3] = S.hasMap ? math.tintAlpha(v, noise, vmax) : 1;
-        if (dim && dim[k] > 1) { S.col[4 * k] = S.col[4 * k + 1] = S.col[4 * k + 2] = 0.74; S.col[4 * k + 3] = S.hasMap ? 0.62 : 1; }   // not counted: grey
+        var av = v < 0 ? -v : v;                               // the ramp at full strength; small changes fade in from the noise level
+        S.col[4 * k + 3] = av <= 0 ? 0 : Math.min(0.97, 0.6 + 0.4 * av / (0.5 * vmax)) * Math.min(1, av / (noise || 1));
       }
       for (var j = 0; j < H; j++) for (var i = 0; i < W; i++) {
         k = j * W + i;
@@ -447,6 +475,7 @@
       }
       S.aPos.needsUpdate = true; S.aCol.needsUpdate = true; S.aNor.needsUpdate = true;
       S.mat.uniforms.depthRef.value = terrain ? 1e9 : Math.max(0.01, Math.min(S.maxCm, vmax) * u);
+      S.mat.uniforms.contour.value = terrain ? 1e9 : Math.max(0.01, vmax / 6 * u);     // one line every sixth of the colour scale
       S.zeroLines.visible = S.zeroSheet.visible = !terrain;   // the zero level only means something for sinking depth
       S.surface.geometry.boundingSphere = null; S.surface.geometry.boundingBox = null;   // recomputed on the next pick
       function height(cell) { return cell >= 0 && mask[cell] ? S.pos[3 * cell + 1] : 0; }
@@ -454,7 +483,7 @@
         for (k = 0; k < S.ribbonCells.length; k++) S.ribbonPos[3 * k + 1] = height(S.ribbonCells[k]) + 0.22;
         S.aRibbon.needsUpdate = true;
       }
-      S.pins.forEach(function (p) { var y = p.y = height(p.cell) + 1.2; p.meshes.forEach(function (m) { m.position.set(p.x, y, p.z); }); });
+      S.pins.forEach(function (p) { var y = p.y = height(p.cell) + 0.2; p.meshes.forEach(function (m) { m.position.set(p.x, y, p.z); }); });
       S.drapes.forEach(function (d) { d.y = height(d.cell) + d.lift; });
       requestRender();
     }
@@ -489,12 +518,29 @@
       camera.lookAt(0, -2, 0);
       renderer.render(scene, camera);
       var w = host.clientWidth, h = host.clientHeight;
-      labels.forEach(function (l) {
+      var nr = 0, q, r;
+      function place(x0, y0, x1, y1, test) {                 // rectangles are kept in one reused array: no per-frame allocation
+        if (test) for (q = 0; q < nr; q += 4) if (x0 < rects[q + 2] && x1 > rects[q] && y0 < rects[q + 3] && y1 > rects[q + 1]) return false;
+        rects[nr] = x0; rects[nr + 1] = y0; rects[nr + 2] = x1; rects[nr + 3] = y1; nr += 4;
+        return true;
+      }
+      if (S) S.pins.forEach(function (p) {
+        if (!p.el) return;
+        vec.set(p.x, p.y, p.z).project(camera);
+        var hide = vec.z > 1 || vec.x < -1.02 || vec.x > 1.02 || vec.y < -1.02 || vec.y > 1.02, px = (vec.x * 0.5 + 0.5) * w, py = (-vec.y * 0.5 + 0.5) * h;
+        p.el.style.display = hide ? 'none' : '';
+        if (hide) return;
+        p.el.style.translate = px.toFixed(1) + 'px ' + py.toFixed(1) + 'px';   // translate, not transform: the hover scale must not move the marker
+        place(px - 11, py - 11, px + 11, py + 11, false);
+      });
+      labels.forEach(function (l) {                          // in priority order: the order the page gave them
         vec.set(l.x, l.y, l.z).project(camera);
-        var hide = vec.z > 1 || vec.x < -1.05 || vec.x > 1.05 || vec.y < -1.05 || vec.y > 1.05;
+        var hide = vec.z > 1 || vec.x < -1.05 || vec.x > 1.05 || vec.y < -1.05 || vec.y > 1.05, px = (vec.x * 0.5 + 0.5) * w, py = (-vec.y * 0.5 + 0.5) * h;
+        if (!hide) { if (!l.w) l.w = l.el.offsetWidth || 8 * l.el.textContent.length; hide = !place(px - l.w / 2 - 3, py - 24, px + l.w / 2 + 3, py - 4, true); }
         l.el.style.display = hide ? 'none' : '';
-        l.el.style.left = ((vec.x * 0.5 + 0.5) * w).toFixed(1) + 'px';
-        l.el.style.top = ((-vec.y * 0.5 + 0.5) * h).toFixed(1) + 'px';
+        if (hide) return;
+        l.el.style.left = px.toFixed(1) + 'px';
+        l.el.style.top = py.toFixed(1) + 'px';
       });
       if (tween) requestRender();
     }
@@ -520,7 +566,7 @@
       renderer.setClearColor(css('--surface', '#fbf9f4'), 1);
       if (S) {
         [S.zeroLines, S.zeroSheet, S.ribbon].forEach(function (o) { if (o) o.material.color.set(ink); });
-        S.pins.forEach(function (p) { p.meshes[1].material.color.set(ink); });
+        S.pins.forEach(function (p) { if (p.meshes[1]) p.meshes[1].material.color.set(ink); });
       }
       requestRender();
     }
@@ -582,7 +628,6 @@
     canvas.addEventListener('pointercancel', function (e) { press = null; release(e); });
     canvas.addEventListener('pointerleave', function (e) { if (e.pointerType === 'mouse' && !count()) engaged = false; });
     canvas.addEventListener('wheel', function (e) {
-      if (!engaged && !e.ctrlKey) return;                    // until the view is clicked, the wheel scrolls the page
       e.preventDefault();
       orbit.radius *= Math.exp(e.deltaY * 0.0012); clamp(); requestRender();
     }, { passive: false });
@@ -607,10 +652,12 @@
         return [(vec.x * 0.5 + 0.5) * host.clientWidth, (-vec.y * 0.5 + 0.5) * host.clientHeight];
       },
       onImagery: function (fn) { if (S) S.onImagery = fn; },
+      zoom: function (f) { orbit.radius *= f; clamp(); requestRender(); },
+      select: function (id) { if (S) S.pins.forEach(function (p) { if (p.el) { if (p.pick.id === id) p.el.classList.add('on'); else p.el.classList.remove('on'); } }); },
       setMode: function (m) {
         mode = m === 'depth' ? 'depth' : 'terrain';
         if (!S) return;
-        S.surface.geometry.setIndex(mode === 'terrain' ? S.idxAll : S.idxData);
+        S.surface.geometry.setIndex(S.idxAll);
         apply();
       },
       setFlatten: function (on) { flatten = !!on; if (S) { tween = null; S.cur.set(valuesOf(S.date)); apply(); } },

@@ -50,10 +50,10 @@
   function fmtR(r) { return r == null ? 'n/a' : r >= 0.995 ? r.toFixed(3) : r.toFixed(2); }
   function last(a) { for (var i = a.length - 1; i >= 0; i--) if (a[i] != null) return a[i]; return null; }
   // One ramp for the map, the legend, the station markers, the charts and the 3D surface (the presentation build uses the same stops).
-  // Sinking: deep red through Rocket Red and orange to a pale "white-hot" peach, so the deepest sinking is the lightest, most salient
-  // thing on the dark base map. Rising: teal to pale aqua. Neither side uses Neon Yellow (reserved for the interface) or the blues of
-  // the interface. Warm against cool with lightness rising on both sides stays apart for red-green colour-blind viewers.
-  var SINK = [[196, 40, 8], [228, 55, 0], [255, 122, 24], [255, 208, 170]], RISE = [[0, 128, 150], [40, 196, 212], [188, 246, 250]];
+  // Sinking: pale amber for a little, then orange, Rocket Red and a hot magenta-red for the most. More sinking is always the hotter,
+  // more saturated colour and never the paler one, so the deepest bowl cannot be read as "less" or as a raised flat. Rising: teal to pale aqua. Neither side uses Neon Yellow (reserved for the interface) or the blues of
+  // the interface. Warm against cool (sinking gets darker and redder, rising gets paler) stays apart for red-green colour-blind viewers.
+  var SINK = [[255, 206, 150], [255, 122, 24], [228, 55, 0], [222, 18, 96]], RISE = [[0, 128, 150], [40, 196, 212], [188, 246, 250]];
   function ramp(t) {                                    // t in [-1, 1]; -1 = deepest sinking
     var st = t < 0 ? SINK : RISE, x = Math.min(1, Math.abs(t)) * (st.length - 1), i = Math.min(Math.floor(x), st.length - 2), f = x - i;
     return [st[i][0] * (1 - f) + st[i + 1][0] * f, st[i][1] * (1 - f) + st[i + 1][1] * f, st[i][2] * (1 - f) + st[i + 1][2] * f];
@@ -94,7 +94,15 @@
   var CROP_SHORT = 'Not yet checked on the ground; crop areas may need filtering.';
   // The one heading of the panel, and the text that belongs under "Details and limits" for the current view.
   // temp = true for a look-up (a station, a spot): the step's own heading and notes come back when it is closed.
-  function setHeading(html, temp) { if (!temp) ui.head = html; $('placeTitle').innerHTML = html; }
+  // The panel's title is the place. A view gets its own heading only when it says something the tab does not:
+  // a look-up (station, spot, line), the farmland finding, and every step of the tour.
+  function setHeading(html, temp) {
+    if (!temp) ui.head = html;
+    var t = $('placeTitle'); t.innerHTML = html;
+    t.hidden = !html || !(temp || tour.active || ui.step === 'crops');
+  }
+  function icon(n) { return '<svg aria-hidden="true"><use href="#i-' + n + '"/></svg>'; }
+  function info(tip) { return '<button type="button" class="info" data-tip="' + esc(tip) + '" aria-label="' + esc(tip) + '">' + icon('info') + '</button>'; }
   function setNotes(html, temp) {
     var full = html ? '<h3>About this view</h3>' + html : '';
     if (!temp) ui.notes = full;
@@ -105,33 +113,35 @@
     return w < 760 ? 190 : Math.max(170, Math.min(330, hh - 520));
   }
   function peakOf(s) { var e = obsEntry(s.id) || {}; return e.peak_change_cm != null ? e.peak_change_cm : s.extreme ? Math.abs(s.extreme.min_cm) : null; }
+  var FARM_TIP = 'Towns and open land only. Farmland is filtered out and never counted: a quick map reads too deep there.';
+  var G3S = { checked: 'Checked', measured: 'Unchecked', none: 'Not mapped' };
+  // The panel header: the place, and a compact status badge whose tooltip carries the explanation.
   function placeHead(s) {
-    var e = obsEntry(s.id) || {}, k = group3(e), chip = $('statusChip'), cav = $('placeCaveat');
+    var e = obsEntry(s.id) || {}, k = group3(e), chip = $('statusChip'), name = $('placeKicker'), sj = s.id === 'sjv' && TRUST;
     if (!obsEntry(s.id)) k = (s.gps || []).length ? 'checked' : 'measured';
-    $('placeKicker').textContent = fullName(s.id);
-    if (s.id === 'sjv' && TRUST) {
-      chip.className = 'status mixed';
-      chip.innerHTML = 'Checked on the ground<span class="sep">&middot;</span>crop signal filtered out';
-    } else {
-      chip.className = 'status ' + (k === 'checked' ? 'ok' : 'warn');
-      chip.textContent = k === 'checked' ? 'Checked against GPS' + (operaAgrees(OPERA[s.id]) ? ' and NASA\'s own map' : '') : G3.measured.label;
-    }
-    cav.hidden = k !== 'measured';
-    cav.textContent = k === 'measured' ? CROP_SHORT : '';
+    name.textContent = shortName(s.id);
+    name.setAttribute('data-tip', fullName(s.id));
+    chip.className = 'badge ' + (k === 'checked' ? 'ok' : 'warn');
+    chip.innerHTML = icon(k === 'checked' ? 'check' : 'dash') + '<span>' + G3S[k] + '</span>';
+    chip.setAttribute('data-tip', sj ? 'Checked on the ground against GPS and California\'s State map. Crop signal filtered out: farmland is never counted.'
+      : k === 'checked' ? 'Checked against GPS' + (operaAgrees(OPERA[s.id]) ? ' and NASA\'s own map.' : '.') : 'Measured, not yet checked against GPS. ' + CROP_SHORT);
+    chip.setAttribute('aria-label', G3[k].label);
   }
 
   // The obvious buttons of a place. San Joaquin has its own three, because its story is the cropland finding.
+  // Tabs: one word each; the tooltip says what the tab answers. San Joaquin's overview already is its confirmed people count,
+  // so it has no separate people tab (the tour still shows that step).
   function stepDefs(s) {
-    var d = [['overview', 'Overview', 'Overview']], I = IMPACT[s.id], sj = s.id === 'sjv' && TRUST;
-    if (tourStation(s)) d.push(['gps', sj ? 'Is it right? Check a town against GPS' : 'Check it against GPS', sj ? 'Town check' : 'GPS check']);
+    var d = [['overview', 'The key figure for this place', 'Overview']], I = IMPACT[s.id], sj = s.id === 'sjv' && TRUST;
+    if (tourStation(s)) d.push(['gps', sj ? 'Is it right? A town checked against GPS' : 'Checked against GPS on the ground', sj ? 'Town' : 'GPS']);
     if (sj) d.push(['crops', 'Why farmland is filtered out', 'Farmland']);
-    if (I && I.exposure) d.push(['people', sj ? 'What we can confirm' : 'Who lives on it', sj ? 'Confirmed' : 'People']);
+    if (I && I.exposure && !sj) d.push(['people', 'Who lives on sinking ground', 'People']);
     return d;
   }
   function buildSteps(s) {
     var box = $('steps'); box.innerHTML = '';
     stepDefs(s).forEach(function (d) {
-      var b = h('button', { type: 'button', 'class': 'step', role: 'tab', 'data-step': d[0], 'aria-pressed': 'false', title: d[1] }, '<span>' + esc(d[2]) + '</span>');
+      var b = h('button', { type: 'button', 'class': 'step', role: 'tab', 'data-step': d[0], 'aria-pressed': 'false', 'data-tip': d[1], 'data-tip-pos': 'top' }, '<span>' + esc(d[2]) + '</span>');
       b.addEventListener('click', function () { stepClick(s.id, d[0]); });
       box.appendChild(b);
     });
@@ -143,7 +153,8 @@
   }
   // The indicator glides to the selected tab.
   function markSteps() {
-    var ind = null, on = null;
+    var ind = null, on = null, back = $('backBtn');
+    if (back) back.hidden = !!(tour && tour.active) || inWorld() || (ui.step === 'overview' && ui.box === 'step');
     Array.prototype.forEach.call($('steps').children, function (b) {
       var k = b.getAttribute('data-step');
       if (!k) { ind = b; return; }
@@ -159,6 +170,7 @@
     ui.box = which;
     $('stepBox').hidden = which !== 'step'; $('detail').hidden = which !== 'detail'; $('impact').hidden = which !== 'impact';
     if (which !== 'detail') { ui.freshKey = null; fresh($(which === 'impact' ? 'impact' : 'stepBox')); countUps($(which === 'impact' ? 'impact' : 'stepBox')); }
+    markSteps();
   }
   function runStep(step) {
     var s = state.site;
@@ -179,30 +191,74 @@
         else if (step === 'crops') { cropsBox(); setShade(true, true); }
         showBox('step');
         if (step === 'crops') cropsChart();      // drawn once the box is visible and has a width
+        else if (step === 'overview') overviewCharts(s);
       }
     }
     markSteps(); syncHash();
   }
   // What a place shows before any button is pressed.
-  function defaultBox(s) { ui.step = 'overview'; overviewBox(s); showBox('step'); markSteps(); }
+  function defaultBox(s) { ui.step = 'overview'; overviewBox(s); showBox('step'); overviewCharts(s); markSteps(); }
 
-  // The explorer's first view of a place: one status line (above), one key figure, and who lives on it where the data supports that.
+  // The explorer's first view of a place: one key figure with a label of a few words. Explanations sit behind the info icon.
   function overviewBox(s) {
-    var I = IMPACT[s.id], k = group3(obsEntry(s.id)), peak = peakOf(s), sj = s.id === 'sjv' && TRUST, html = '';
-    var g5 = I && I.exposure && I.exposure.people && I.exposure.people.ge_5cm;
+    var peak = peakOf(s), sj = s.id === 'sjv' && TRUST, html = '';
     if (sj) {
       setHeading('Confirmed sinking ground');
-      html = bignum('<small>at least</small>' + num(TRUST.people.ge_5cm_floor, 'int'), 'people on ground that sank 5&nbsp;cm or more', 'huge') +
-        '<p class="plain">Towns and open land only. <b>Farmland is filtered out</b> and never counted.</p>';
+      html = bignum('<small>at least</small>' + num(TRUST.people.ge_5cm_floor, 'int'), 'people where ground sank ≥&nbsp;5&nbsp;cm' + info(FARM_TIP), 'huge');
     } else {
       setHeading(peak == null ? 'Ground movement over ' + months(s) + ' months' : 'Deepest sinking in ' + months(s) + ' months');
-      if (peak != null) html += bignum(num(peak, peak >= 20 ? 'n' : 'fix1') + ' cm', 'at the fastest-sinking spot', 'huge');
-      if (g5 && g5.people >= 1000) html += bignum('<small>' + (k === 'checked' ? 'about' : 'unchecked estimate') + '</small>' + fmtPeople(g5.people), 'people on ground that sank 5&nbsp;cm or more', 'second');
+      html = peak != null ? bignum(num(peak, peak >= 20 ? 'n' : 'fix1') + ' cm', 'deepest sinking, ' + months(s) + ' months', 'huge')
+        : bignum(String(s.dates.length), 'radar passes', 'huge');
     }
-    html += '<p class="hintline"><i></i>Click the map or a station to read that spot.</p>';
-    $('stepBox').innerHTML = html;
-    setNotes('<p class="note">Warm colours are sinking, blue is rising. ' + s.dates.length + ' passes of the NISAR radar, ' + fmtDate(s.dates[0]) + ' to ' + fmtDate(s.dates[s.dates.length - 1]) +
-      '. Drag the timeline or press play to watch the change build up.' + (sj ? ' Mainly ' + TRUST.people.mostly.slice(0, 3).map(function (m) { return esc(m[0]); }).join(', ') + '.' : '') + '</p>');
+    $('stepBox').innerHTML = html + overviewCards(s);
+    Array.prototype.forEach.call($('stepBox').querySelectorAll('[data-go]'), function (b) {
+      b.addEventListener('click', function () { runStep(b.getAttribute('data-go')); });
+    });
+    setNotes('<p class="note">Warm colours are sinking, teal is rising. ' + s.dates.length + ' passes of the NISAR radar, ' + fmtDate(s.dates[0]) + ' to ' + fmtDate(s.dates[s.dates.length - 1]) +
+      '. Drag the timeline or press play to watch the change build up. Click the map or a station to read that spot.' +
+      (sj ? ' ' + FARM_TIP + ' Mainly ' + TRUST.people.mostly.slice(0, 3).map(function (m) { return esc(m[0]); }).join(', ') + '.' : '') + '</p>');
+  }
+
+  // Outside the tour the panel has no tabs: under the key figure, one card for "is it right?" (a GPS station on the ground)
+  // and one for the place's other finding (San Joaquin: why farmland is faint; elsewhere: who lives on sinking ground).
+  // Each card's button opens the full view and moves the map; "Overview" at the top comes back.
+  function card(title, body, go, label) {
+    return '<section class="ov-card"><h3>' + title + '</h3>' + body +
+      (go ? '<button type="button" class="ov-go" data-go="' + go + '">' + esc(label) + icon('chevron') + '</button>' : '') + '</section>';
+  }
+  function overviewCards(s) {
+    var g = tourStation(s), sj = s.id === 'sjv' && TRUST, out = '', I = IMPACT[s.id];
+    if (g) {
+      var T = sj && TRUST.town_check && TRUST.town_check.station === g.id ? TRUST.town_check.town : null;
+      out += card('Is it right? Checked against GPS', '<div class="kpis gpsk">' + kpi(cm(last(g.gps_cm)) + ' cm', 'GPS' + (T ? ', ' + esc(T) : ' ' + esc(g.id))) + kpi(cm(last(g.radar_cm)) + ' cm', 'radar, same spot') +
+        kpi(g.rms_cm == null ? 'n/a' : g.rms_cm.toFixed(1) + ' cm', 'typical gap') + '</div>' +
+        '<div class="chart-legend"><span><i style="border-color:var(--radar)"></i>Radar</span><span><i style="border-color:var(--gps)"></i>GPS</span></div><div class="chart mini" data-chart="gps"></div>', 'gps', 'Show the station');
+    }
+    if (sj) {
+      var W = TRUST.towns;
+      out += card('Why farmland is faint', '<div class="kpis">' + kpi(W.n_fields_lower + ' of ' + W.n, 'towns: fields read lower') + kpi(cm(W.fields_minus_town_cm) + ' cm', 'fields against their town') + '</div>' +
+        '<p class="plain">Crops fool the radar, so farmland is drawn faint and never counted.</p>' +
+        '<div class="chart-legend"><span><i style="border-color:var(--radar)"></i>Our map</span><span><i class="dash" style="border-color:var(--gps)"></i>State map</span></div><div class="chart mini" data-chart="crops"></div>', 'crops', 'Show the evidence');
+    } else if (I && I.exposure && I.exposure.people && I.exposure.people.ge_5cm && I.exposure.people.ge_5cm.people != null) {
+      var n5 = I.exposure.people.ge_5cm.people, chk = group3(obsEntry(s.id)) === 'checked';
+      out += card('Who lives on it', bignum((chk ? (n5 >= 1000 ? '<small>about</small>' : '') : '<small>unchecked estimate</small>') + fmtPeople(n5), 'people where ground sank ≥&nbsp;5&nbsp;cm', 'second'), 'people', 'Show people and roads');
+    }
+    return out;
+  }
+  // The cards' small charts, drawn once the box is visible and has a width.
+  function overviewCharts(s) {
+    var gh = $('stepBox').querySelector('[data-chart="gps"]'), ch = $('stepBox').querySelector('[data-chart="crops"]'), g = tourStation(s);
+    if (gh && g) {
+      var ax = dateAxis(s);
+      chart(gh, { height: 140, yLabel: 'cm', xs: ax.xs, xTicks: ax.ticks, xFmt: ax.fmt, label: 'Radar against GPS station ' + g.id,
+        series: [{ name: 'Radar', short: 'Radar', ys: g.radar_cm, color: 'var(--radar)', width: 2.5 }, { name: 'GPS', short: 'GPS', ys: g.gps_cm, color: 'var(--gps)', width: 2.5 }] });
+    }
+    if (ch && TRUST) {
+      var T = TRUST.towns, dates = T.by_date.map(function (x) { return x[0]; }), bx = dateAxis({ dates: dates });
+      chart(ch, { height: 130, yLabel: 'cm, fields minus town', xs: bx.xs, xTicks: bx.ticks, xFmt: bx.fmt, label: 'Fields read lower than the town they surround',
+        series: [{ name: 'Our map', short: 'Our map', ys: T.by_date.map(function (x) { return x[1]; }), color: 'var(--radar)', width: 2.5 },
+          { name: 'State map', short: 'State map', ys: dates.map(function (d) { return d >= '20251201' && d <= '20260710' ? T.state_fields_minus_town_cm : null; }), color: 'var(--gps)', width: 2, dash: '6 4' }] });
+    }
   }
 
   function kpi(v, l) { return '<div class="kpi"><div class="v">' + v + '</div><div class="l">' + l + '</div></div>'; }
@@ -352,6 +408,7 @@
     map.createPane('trust'); map.getPane('trust').style.zIndex = 360; map.getPane('trust').style.pointerEvents = 'none';
     vectors = L.layerGroup().addTo(map);
     map.on('click', onMapClick);
+    map.on('zoomend moveend', baseSource);
     setBasemap();
     // A tile server can answer with an error picture that still "loads" (that is what the blocked tiles were).
     // One readable request tells us; if it is refused, drop the base map instead of showing error tiles.
@@ -380,9 +437,21 @@
     layer.on('tileload', function () { loaded++; });
     layer.on('tileerror', function () { failed++; if (!loaded && failed >= 6) plainBasemap(); });
     tiles = layer.addTo(map);
+    baseSource();
     var box = $('map'); if (box && box.classList) box.classList.toggle('sat', sat);
   }
 
+  function bundledCovers() {
+    var V = window.BASE_VIEWS;
+    if (!V || !map || !map._loaded || state.base !== 'sat') return false;   // no view set yet (start-up)
+    var vb = map.getBounds(), sw = vb.getSouthWest(), ne = vb.getNorthEast();   // the whole view, not only its centre: no edge of the picture in sight
+    var res = 360 / (256 * Math.pow(2, map.getZoom()));          // degrees of longitude per screen pixel
+    return ['valley', 'mexico'].some(function (k) {
+      var v = V[k], b = v && v.bounds;
+      return !!b && sw.lat >= b[0][0] && ne.lat <= b[1][0] && sw.lng >= b[0][1] && ne.lng <= b[1][1] && res >= 0.8 * (b[1][1] - b[0][1]) / v.width;
+    });
+  }
+  function baseSource() { if (tiles && tiles.setOpacity) tiles.setOpacity(bundledCovers() ? 0 : 1); }
   function setBase(b) {
     state.base = b;
     setBasemap();
@@ -442,6 +511,7 @@
   }
 
   function highlight() {
+    if (view3d && view3d.select) view3d.select(state.sel && state.sel.type === 'gps' ? state.sel.id : null);
     Object.keys(shapes).forEach(function (k) {
       var sh = shapes[k], on = state.sel && (state.sel.type + ':' + (state.sel.name || state.sel.id)) === k;
       if (sh.line) sh.line.setStyle(on ? { color: '#EAFE07', weight: 4 } : sh.base);
@@ -518,19 +588,23 @@
     });
   }
 
+  // The legend: the colour bar with its two end values and the unit, the farmland swatch, and in 3D what height means.
+  // Everything else (since when, the noise level, what the hatch means) is in tooltips and in Details.
   function legend(s) {
-    var v = s.overlay.vmax_cm, n = s.noise.value_cm, stops = rampStops();
-    var shade = s.id === 'sjv' && TRUST && state.shade, lg = $('legend');
-    lg.innerHTML = '<div class="bar" style="background:linear-gradient(90deg,' + stops + ')"></div>' +
-      '<div class="ticks"><span>−' + v + ' cm sinking</span><span>rising +' + v + ' cm</span></div>' +
-      '<div class="cap">since ' + fmtDate(s.dates[0]) + '</div>' +
-      (shade ? '<div class="lg-key"><i class="sw-crop"></i>farmland: filtered out</div>' : '');
-    // the explanations stay available on hover or tap, and in "Details and limits"
-    lg.title = (n == null ? '' : 'Clear = under ' + n.toFixed(1) + ' cm, too small to tell from noise. ') +
-      (shade ? 'Hatched farmland carries a crop signal and is filtered out of every count. Grey edges and hills are not checked.' : '');
+    var v = s.overlay.vmax_cm, n = s.noise.value_cm, shade = s.id === 'sjv' && TRUST && state.shade, lg = $('legend');
+    var f = state.view === '3d' && view3d && view3d.info ? view3d.info() : null;
+    lg.innerHTML = '<div class="bar" style="background:linear-gradient(90deg,' + rampStops() + ')"></div>' +
+      '<div class="ticks"><span>' + icon('down') + '−' + v + ' cm</span><span>+' + v + ' cm' + icon('up') + '</span></div>' +
+      (shade ? '<div class="lg-key" tabindex="0" data-tip="Farmland: shown faint and hatched. A quick map reads too deep here, so it is never counted and has no depth in 3D." data-tip-pos="right"><i class="sw-crop"></i>farmland, not counted</div>' : '') +
+      (f ? '<div class="lg-key" tabindex="0" data-tip="Height is how far the ground sank, stretched ' + f.times.toLocaleString('en-US') + ' times so that centimetres show. Flat means no confirmed change." data-tip-pos="right">' +
+        icon('depth') + 'depth ×' + f.times.toLocaleString('en-US') + '</div>' : '');
+    lg.setAttribute('data-tip', 'Ground movement since ' + fmtDate(s.dates[0]) + ': sinking on the left, rising on the right.' +
+      (n == null ? '' : ' Under ' + n.toFixed(1) + ' cm is left clear: too small to tell from noise.'));
+    lg.setAttribute('data-tip-pos', 'right');
+    lg.setAttribute('aria-label', 'Colour scale');
     $('measureNote').innerHTML = '<b>What exactly is measured.</b> ' + esc(s.quantity.note) + (n == null ? '' : ' Noise level: ±' + n.toFixed(1) + ' cm (' + esc(s.noise.label) + '); the map leaves smaller changes clear.') +
       (s.grid && s.grid.clipped_at_cm ? ' The colour scale and the values stop at ' + s.grid.clipped_at_cm + ' cm.' : '') +
-      (s.id === 'sjv' && TRUST ? ' Hatched farmland reads too deep and is not counted; grey edges of the data and hills outside the State map are not checked.' : '');
+      (s.id === 'sjv' && TRUST ? ' Hatched farmland reads too deep and is not counted; edges of the data and hills outside the State map are not checked and not drawn.' : '');
   }
 
   // ---------- San Joaquin trust mask: cropland reads too deep, so it is shaded and not counted
@@ -583,11 +657,11 @@
     return el;
   }
   function trustEls() { return [confLayer, hatchLayer].map(function (l) { return l && l.getElement ? l.getElement() : null; }).filter(function (e) { return e && e.classList; }); }
-  // The quick map is wiped away (west to east) while the confirmed map is on, except left of the swipe divider.
+  // While the confirmed map is on, the quick map fades to a faint grey ghost under the hatch (full strength left of the swipe divider).
   function applyVis() {
     var el = overlay && overlay.getElement ? overlay.getElement() : null;
     if (!el || !el.classList) return;
-    if (confLayer && state.shade && !state.compare && state.site && state.site.id === 'sjv') el.classList.add('gone'); else el.classList.remove('gone');
+    if (confLayer && state.shade && !state.compare && state.site && state.site.id === 'sjv') el.classList.add('ghost'); else el.classList.remove('ghost');
   }
   // The farmland filter. fade: true = the tour's reveal (a beat, then the filter sweeps across); 'now' = sweep at once.
   function setShade(on, fade) {
@@ -630,7 +704,7 @@
     var s = state.site; state.i = i;
     $('dateSlider').value = i;
     $('dateLabel').textContent = fmtDate(s.dates[i]);
-    $('dateSub').textContent = i === 0 ? 'start of the record' : days(s.dates[0], s.dates[i]) + ' days in';
+    $('dateLabel').setAttribute('data-tip', i === 0 ? 'Start of the record' : days(s.dates[0], s.dates[i]) + ' days in');
     timelineAt(i); syncHash();
     if (overlay) overlay.setUrl(overlayUrl(s, i));
     if (confLayer) confLayer.setUrl(confirmedUrl(s, i));
@@ -734,7 +808,7 @@
   // ---------- detail panel
   function select(sel) { state.sel = sel; var p = $('picker'); p.value = sel ? sel.type + ':' + (sel.name || sel.id || '') : ''; if (p.selectedIndex < 0) p.selectedIndex = 0; highlight(); renderDetail();
     if (sel) { showBox('detail'); ui.step = sel.type === 'gps' && tourStation(state.site) && tourStation(state.site).id === sel.id ? 'gps' : null; markSteps(); setPanel(true); syncHash(); }
-    else if (ui.box === 'detail') { showBox('step'); $('placeTitle').innerHTML = ui.head || ''; $('stepNotes').innerHTML = ui.notes || ''; }
+    else if (ui.box === 'detail') { showBox('step'); setHeading(ui.head || ''); $('stepNotes').innerHTML = ui.notes || ''; }
   }
 
   function buildPicker(s) {
@@ -839,11 +913,13 @@
       catch (e) { $('viewToggle').hidden = true; v = '2d'; }   // WebGL refused after all: stay in 2D
     }
     state.view = v;
-    $('controls3d').hidden = v !== '3d'; $('layerRow').hidden = v === '3d'; $('mode3d').hidden = v !== '3d';
+    $('controls3d').hidden = v !== '3d'; $('layerRow').hidden = v === '3d'; $('reset3d').hidden = v !== '3d';
+    $('layersMenu').classList.toggle('in3d', v === '3d');   // Compare, Canals and roads, and Base are 2D-only: hidden in 3D
+    $('hoverChip').classList.remove('on');
     $('mapWrap').setAttribute('data-view', v); markSteps(); syncHash();
     if (v === '3d' && state.compare) setCompare(false, true);
     Array.prototype.forEach.call($('viewToggle').children, function (b) { b.setAttribute('aria-pressed', b.getAttribute('data-view') === v ? 'true' : 'false'); });
-    if (v === '3d') load3d();
+    if (v === '3d') load3d(); else if (state.site) legend(state.site);
     else if (map) setTimeout(function () { map.invalidateSize(); }, 30);
   }
 
@@ -864,22 +940,26 @@
   }
 
   function load3d() {
-    var s = state.site;
+    var s = state.site, cities = CITY_LABELS[s.id];
     if (view3dSite !== s.id) {
       view3d.setSite({ grid: s.grid, frames: gridFrames(s), bounds: s.overlay.bounds, vmax: s.overlay.vmax_cm, noise: s.noise.value_cm,
-        alignments: [], gps: state.showGps ? s.gps : [], places: s.places, upliftConfirmed: upliftConfirmed(s), dim: s.id === 'sjv' && TRUST && state.shade ? trustMask() : null,
-        imagery: { url: (window.BASE_TEXTURE && window.BASE_TEXTURE[s.id]) || TILES.sat, credit: SAT_CREDIT }, elevation: DEM });
-      view3d.onImagery(caption3d);                                   // the caption mentions the imagery once it is there
+        alignments: [], gps: state.showGps ? s.gps : [], upliftConfirmed: upliftConfirmed(s),
+        places: cities ? cities.map(function (c) { return { name: c[0], lat: c[1], lon: c[2] }; }) : s.places,      // in priority order: labels never overlap
+        dim: s.id === 'sjv' && TRUST && state.shade ? trustMask() : null,                                         // filter on: farmland flat and hatched
+        imagery: { url: (window.BASE_TEXTURE && window.BASE_TEXTURE[s.id]) || TILES.sat, credit: SAT_CREDIT }, elevation: null });
+      view3d.onImagery(caption3d);
       view3dSite = s.id;
     }
     view3d.resize();
     view3d.setDate(state.i, false);
+    view3d.select(state.sel && state.sel.type === 'gps' ? state.sel.id : null);
     caption3d();
   }
 
   function caption3d() {
     var s = state.site, f = view3d && view3d.info(), g = s.grid;
     if (!f) return;
+    legend(s);
     var t;
     if (f.mode === 'terrain') {
       t = f.dem === 'ok'
@@ -1099,7 +1179,7 @@
     if (s.id === 'sjv' && TRUST) {
       var T = TRUST.people, rg = T.range_if_threshold_moved_by_1cm;
       setHeading('What we can confirm');
-      box.innerHTML = bignum('<small>at least</small>' + num(T.ge_5cm_floor, 'int'), 'people on ground that sank 5&nbsp;cm or more', 'huge');
+      box.innerHTML = bignum('<small>at least</small>' + num(T.ge_5cm_floor, 'int'), 'people where ground sank \u2265&nbsp;5&nbsp;cm' + info(FARM_TIP), 'huge');
       setNotes('<p class="note">Mainly ' + T.mostly.slice(0, 3).map(function (m) { return esc(m[0]); }).join(', ').replace(/, ([^,]*)$/, ' and $1') + '. Towns and open land only. ' +
         'It is a floor: farmland is shaded and not counted, and nearly 4 in 10 residents live on ground we do not count.</p>' +
         '<p class="note">' + T.mostly.map(function (m) { return esc(m[0]) + ' ' + m[1].toLocaleString('en-US'); }).join(', ') + '. Period: ' + esc(T.window) +
@@ -1110,7 +1190,7 @@
     }
     var ports = (inf.airports || []).filter(function (a) { return a.median_cm != null && a.beyond_noise; }).sort(function (a, b) { return a.median_cm - b.median_cm; });
     setHeading('Who lives on it');
-    box.innerHTML = bignum((k !== 'checked' ? '<small>unchecked estimate:</small> ' : g5 && g5.people >= 1000 ? '<small>about</small> ' : '') + fmtPeople(g5 && g5.people), 'people on ground that sank 5&nbsp;cm or more', 'huge') +
+    box.innerHTML = bignum((k !== 'checked' ? '<small>unchecked estimate:</small> ' : g5 && g5.people >= 1000 ? '<small>about</small> ' : '') + fmtPeople(g5 && g5.people), 'people where ground sank \u2265&nbsp;5&nbsp;cm' + (k !== 'checked' ? info(CROP_SHORT) : ''), 'huge') +
       (ports[0] ? '<p class="plain">' + esc(ports[0].name) + ' sank about ' + Math.abs(ports[0].median_cm).toFixed(0) + ' cm.</p>' : '');
     var more = '<p class="note">In ' + s.span_days + ' days (' + esc(monthSpan(s.dates)) + '), ' + quantityWords(E.quantity && E.quantity.key) + '.' +
       (g10 && g10.people != null ? ' On ground that sank 10 cm or more: ' + fmtPeople(g10.people) + ' people.' : '') + '</p>';
@@ -1187,11 +1267,11 @@
     return { ids: ids, total: total, parts: parts };
   }
   function worldImpact() {
-    var box = $('worldImpact'), W = worldPeople(), mx = DATA.mexico_city, g = mx && mx.gps && mx.gps[0], gap = 0;
+    var box = $('worldImpact'), W = worldPeople(), mx = DATA.mexico_city, g = mx && mx.gps && mx.gps[0], gap = 0, wc = worldCounts();
     if (!box) return;
     if (g) g.gps_cm.forEach(function (v, i) { if (v != null && g.radar_cm[i] != null) gap = Math.max(gap, Math.abs(v - g.radar_cm[i])); });
-    var wc = worldCounts();
-    box.innerHTML = bignum(num(wc.checked + wc.measured, 'n'), 'places mapped so far', 'huge');
+    box.innerHTML = bignum(num(wc.checked + wc.measured, 'n'), 'places mapped so far' +
+      info(wc.checked + ' checked against GPS, ' + wc.measured + ' measured and not yet checked. Small dots are known sinking places not mapped yet.'), 'huge');
     $('worldNotes').innerHTML = '<p class="note">' + wc.checked + ' of the ' + (wc.checked + wc.measured) + ' mapped places are checked against GPS; ' + wc.measured + ' are measured and not yet checked.</p>' +
       (W.ids.length ? '<p class="note">About ' + fmtPeople(Math.round(W.total / 1e5) * 1e5) + ' people live on ground that sank 5 cm or more in the ' + W.ids.length + ' GPS-checked places: ' + esc(W.parts.join(' + ')) + '. Places not yet checked are left out of this number.</p>' : '') +
       (g ? '<p class="note"><b>It runs anywhere the radar looks.</b> Best-checked example: in Mexico City the map stays within ' + (gap <= 1.2 ? 'a centimetre' : gap.toFixed(1) + ' cm') + ' of GPS all year.</p>' : '') +
@@ -1328,36 +1408,39 @@
       (L.url ? '<p><a href="' + esc(L.url) + '" rel="noopener" target="_blank">Read the study</a></p>' : '') + '</div>';
   }
   // A clicked dot: one status label, one number or one line; the rest sits behind "More about this place".
-  function published(e) { return e.literature && e.literature.rate_cm_yr != null ? '<p class="plain">Published research reports about <b>' + e.literature.rate_cm_yr + ' cm per year</b>. That is not our measurement.</p>' : ''; }
+  function published(e) {
+    return e.literature && e.literature.rate_cm_yr != null ? '<p class="plain">Published: <b>' + e.literature.rate_cm_yr + ' cm a year</b>' + info('From published research, not our measurement.') + '</p>' : '';
+  }
+  // A clicked dot: the place as the title, one status label (its tooltip explains), one number or one line.
   function worldCard(e) {
-    var k = group3(e), st = STATUS[e.status] || STATUS.not_processed, sj = e.id === 'sjv' && TRUST, more = '';
-    $('worldTitle').textContent = e.name + (e.country && e.name.indexOf(e.country) < 0 ? ', ' + e.country : '');
-    var html = '<div class="kicker"><span class="dot3 ' + k + '"></span>' + esc(G3[k].label) + '</div>';
+    var k = group3(e), st = STATUS[e.status] || STATUS.not_processed, sj = e.id === 'sjv' && TRUST, more = '', title = $('worldTitle');
+    title.textContent = e.name + (e.country && e.name.indexOf(e.country) < 0 ? ', ' + e.country : ''); title.hidden = false;
+    var why = k === 'checked' ? G3.checked.label + '.' : k === 'measured' ? G3.measured.label + '. ' + CROP_SHORT
+      : e.status === 'refused' ? 'We processed the radar here and do not trust the result, so there is no map.'
+        : e.status === 'unconfirmed' ? 'The radar result did not match published studies, so no number is reported.' : st.text;
+    var html = '<div class="kicker" tabindex="0" data-tip="' + esc(why) + '"><span class="dot3 ' + k + '"></span>' + (k === 'none' ? 'Not mapped yet' : G3S[k]) + '</div>';
     if (e.status === 'refused') {
-      html += '<p class="plain"><b>Not mapped yet.</b> We tried here, and do not trust the result.</p>' + published(e);
+      html += '<p class="plain">Tried; result not trusted.</p>' + published(e);
       more += '<p class="note">' + esc(e.reason || '') + ' ' + (e.refused_by === 'manual_review' ? 'Decided by the team on reviewing the result by hand, not by an automatic test.' : 'Rejected by the pipeline\'s automatic quality check.') +
         (e.pipeline && e.pipeline.pairs ? ' We processed ' + e.pipeline.pairs + ' radar image pairs, ' + monthSpan(e.dates) + '.' : '') + '</p>';
     } else if (e.status === 'unconfirmed') {
-      html += '<p class="plain"><b>Not mapped yet.</b> We tried here, and could not confirm it.</p>' + published(e);
+      html += '<p class="plain">Tried; not confirmed.</p>' + published(e);
       more += '<p class="note">' + esc(e.unconfirmed_reason || st.text) + ' The radar result passed the automatic quality check' +
         (e.pipeline && e.pipeline.pairs ? ' (' + e.pipeline.pairs + ' image pairs, ' + monthSpan(e.dates) + ')' : '') + ', but did not match published studies, so no number is reported and it is left out of every total.</p>';
     } else if (k === 'none') {
-      html += '<p class="plain"><b>Not mapped yet.</b> ' + (e.first_batch_rank ? 'Next in line to be measured.' : 'Known from published research only.') + '</p>' +
-        published(e);
+      html += '<p class="plain">' + (e.first_batch_rank ? 'Next in line.' : 'Known from research only.') + '</p>' + published(e);
       more += '<p class="note">' + esc(st.text) + (e.first_batch_rank ? ' Number ' + e.first_batch_rank + ' in our first batch.' : '') + '</p>';
     } else if (sj) {
-      html += '<p class="plain"><b>At least ' + TRUST.people.ge_5cm_floor.toLocaleString('en-US') + ' people</b> on ground that sank 5 cm or more.</p>';
+      html += '<p class="plain"><b>At least ' + TRUST.people.ge_5cm_floor.toLocaleString('en-US') + ' people</b> where ground sank ≥ 5 cm' + info(FARM_TIP) + '</p>';
     } else {
       html += '<p class="plain"><b>' + esc(capital(obsNumber(e))) + '</b></p>';
-      if (k === 'measured') html += '<p class="caveat">' + esc(CROP_SHORT) + '</p>';
       if (LOW_CONFIDENCE[e.id]) more += '<p class="note"><b>Low confidence:</b> ' + esc(LOW_CONFIDENCE[e.id]) + '</p>';
     }
     var cov = coveredBy(e);
     if (cov) more += '<p class="note">' + esc(coverLabel(cov)) + ': a free ground-motion service already maps this area. <a href="' + esc(cov.url) + '" rel="noopener" target="_blank">' + esc(cov.name) + '</a></p>';
     more += literatureHtml(e);
-    if (e.has_site_data && DATA[e.id]) html += '<p><button class="cta open-site" type="button">Open ' + esc(shortName(e.id)) + ' →</button></p>';
-    html += '<p><button class="cta quiet all-places" type="button">All places</button></p>';
-    if (more) html += '<details class="about"><summary>More about this place</summary>' + more + '</details>';
+    html += '<p>' + (e.has_site_data && DATA[e.id] ? '<button class="cta open-site" type="button">Open →</button>' : '') + '<button class="cta quiet all-places" type="button">All places</button></p>';
+    if (more) html += '<details class="about"><summary>More</summary>' + more + '</details>';
     $('worldImpact').hidden = true;
     var box = $('worldCard');
     box.innerHTML = html;
@@ -1366,17 +1449,15 @@
     var ap = box.querySelector && box.querySelector('.all-places');
     if (ap && ap.addEventListener) ap.addEventListener('click', function () { goWorld(null); });
   }
-  // The world panel before anything is clicked: the headline number and Mexico City, the best-checked example.
-  function worldButtons(close) {
+  // The world panel before anything is clicked: the number, and Mexico City as the best-checked example.
+  function worldButtons() {
     var box = $('worldCard');
-    box.innerHTML = '<p>' + (DATA.mexico_city ? '<button class="cta open-mx" type="button">Open Mexico City →</button>' : '') +
-      (close ? '<button class="cta quiet again" type="button">← Back to the start</button>' : '') + '</p>';
-    var b = box.querySelector && box.querySelector('.open-mx'), a = close && box.querySelector && box.querySelector('.again');
+    box.innerHTML = DATA.mexico_city ? '<p><button class="cta open-mx" type="button" data-tip="The best-checked place: within a centimetre of GPS all year" data-tip-pos="left">Open Mexico City →</button></p>' : '';
+    var b = box.querySelector && box.querySelector('.open-mx');
     if (b && b.addEventListener) b.addEventListener('click', function () { flyToSite('mexico_city'); });
-    if (a && a.addEventListener) a.addEventListener('click', function () { tourGo(0); });
   }
-  function worldIntro() { $('worldTitle').textContent = 'It runs anywhere'; $('worldImpact').hidden = false; worldButtons(false); countUps($('worldImpact')); }
-  function closeCard() { $('worldTitle').textContent = 'One thing to remember'; worldButtons(true); }
+  function worldIntro() { var t = $('worldTitle'); t.textContent = ''; t.hidden = true; $('worldImpact').hidden = false; worldButtons(); countUps($('worldImpact')); }
+  function closeCard() { worldIntro(); }
   function worldCounts() {
     var c = { checked: 0, measured: 0, none: 0 };
     OBS.forEach(function (e) { c[group3(e)]++; });
@@ -1385,7 +1466,7 @@
   function worldLegend() {
     var c = worldCounts();
     $('worldLegend').innerHTML = ['checked', 'measured', 'none'].map(function (k) {
-      return '<div class="wl"><span class="dot3 ' + k + '"></span><b>' + (k === 'none' ? '' : c[k]) + '</b> ' + esc(G3[k].label.charAt(0).toLowerCase() + G3[k].label.slice(1)) + '</div>';
+      return '<div class="wl" data-tip="' + esc(G3[k].label) + (k === 'none' ? '' : ': ' + c[k] + ' places') + '" data-tip-pos="right"><span class="dot3 ' + k + '"></span>' + G3S[k] + '</div>';
     }).join('');
     var G = window.GLOBAL_LAYER, box = $('worldOptions'), html = '';
     if (COVER.length) html += '<p class="small">Hatched areas already have a free ground-motion service: ' + COVER.map(function (x) {
@@ -1433,7 +1514,7 @@
     underlay(world);
     world.setView([20, 10], 2);                    // polygons need a view before they are added; showWorld() fits it properly
     window.GroundlineWorld = world;                // for debugging and the browser tests
-    L.tileLayer(TILES.sat, { maxZoom: 18, attribution: SAT_CREDIT, zIndex: 1 }).addTo(world);
+    L.tileLayer(TILES.sat, { minZoom: 4, maxZoom: 18, attribution: SAT_CREDIT, zIndex: 1 }).addTo(world);   // the overview uses the bundled picture only
     L.tileLayer(ESRI + 'Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}', { maxZoom: 18, opacity: 0.85, zIndex: 10,
       attribution: 'Labels &copy; Esri, HERE, Garmin' }).addTo(world);
     world.attributionControl.addAttribution('Radar: NISAR previews via ASF DAAC');
@@ -1680,7 +1761,7 @@
   }
 
   // ----- menus
-  var MENUS = [['layersBtn', 'layersMenu'], ['exportBtn', 'exportMenu']];
+  var MENUS = [['layersBtn', 'layersMenu'], ['exportBtn', 'exportMenu'], ['attrBtn', 'attrBox']];
   function closeMenus(except) {
     MENUS.forEach(function (m) { if (m[1] !== except) { $(m[1]).classList.remove('open'); $(m[0]).setAttribute('aria-expanded', 'false'); } });
     if (except !== 'searchResults') { $('searchResults').classList.remove('open'); $('search').setAttribute('aria-expanded', 'false'); }
@@ -1740,13 +1821,13 @@
   function searchRender() {
     var box = $('searchResults'), q = $('search').value || '';
     searchHits = searchRun(q); searchAt = searchHits.length && q.trim() ? 0 : -1;
-    var TAG = { checked: 'Mapped, checked', measured: 'Mapped, not yet checked', none: 'Not mapped yet' };
-    box.innerHTML = (q.trim() ? '' : '<h3>Start here</h3>') + (searchHits.length ? searchHits.map(function (h, i) {
+    var TAG = { checked: 'Checked', measured: 'Unchecked', none: 'Not mapped' };
+    box.innerHTML = (searchHits.length ? searchHits.map(function (h, i) {
       var x = h.x, tag = x.k === 'measured' && !x.mapped ? 'Measured' : TAG[x.k];
       return '<button type="button" class="res' + (i === searchAt ? ' active' : '') + '" role="option" data-i="' + i + '" style="--i:' + i + '"><span class="dot3 ' + x.k + '"></span><span><b>' + esc(x.name) + '</b><small>' +
         esc(x.sub) + (h.via ? (x.sub ? ' · ' : '') + 'includes ' + esc(h.via) : '') + '</small></span><span class="tag ' + x.k + '">' + tag + '</span></button>';
-    }).join('') : '<p class="res-empty">No known sinking place matches “' + esc(q.trim()) + '”. Groundline lists places from published research, so yours may not be in the catalogue yet.</p>') +
-      (q.trim() ? '' : '<button type="button" class="res" role="option" data-world="1" style="--i:' + searchHits.length + '"><span class="dot3 none"></span><span><b>World map</b><small>Every place Groundline has looked at</small></span><span class="tag">' + (worldCounts().checked + worldCounts().measured) + ' mapped</span></button>');
+    }).join('') : '<p class="res-empty">No match in the catalogue of known sinking places.</p>') +
+      (q.trim() ? '' : '<button type="button" class="res" role="option" data-world="1" style="--i:' + searchHits.length + '"><span class="dot3 none"></span><span><b>World map</b></span><span class="tag">' + (worldCounts().checked + worldCounts().measured) + ' mapped</span></button>');
     box.classList.remove('open'); void box.offsetWidth; box.classList.add('open');
     $('search').setAttribute('aria-expanded', 'true');
     Array.prototype.forEach.call(box.querySelectorAll ? box.querySelectorAll('.res') : [], function (b) {
@@ -1779,10 +1860,10 @@
     $('gpsToggle').checked = state.showGps; $('linesToggle').checked = state.showLines;
     Array.prototype.forEach.call(document.querySelectorAll('[data-base]'), function (x) { x.setAttribute('aria-pressed', x.getAttribute('data-base') === state.base ? 'true' : 'false'); });
   }
-  function redrawVectors() { if (state.site && vectors) { drawVectors(state.site); highlight(); } syncHash(); }
+  function redrawVectors() { if (state.site && vectors) { drawVectors(state.site); highlight(); } syncHash(); if (view3d && state.view === '3d') { view3dSite = null; load3d(); } }
   // Swipe: the quick map on the left of the divider, the confirmed map (farmland filtered out) on the right.
   function setCompare(on, quiet) {
-    var can = !!(state.site && state.site.id === 'sjv' && TRUST);
+    var can = !!(state.site && state.site.id === 'sjv' && TRUST && state.view !== '3d');
     state.compare = !!on && can;
     $('compareToggle').checked = state.compare; $('swipe').hidden = !state.compare;
     if (state.compare && !state.shade) setShade(true);
@@ -1826,8 +1907,9 @@
     $('trackMark').hidden = m > 1; $('trackNote').hidden = m > 1;
     if (m <= 1) {
       var more = Math.round(days(end, s.dates[n - 1]) / 30.44);
-      $('trackNote').innerHTML = 'State\'s official map ends here<b>NISAR: ' + more + ' more month' + (more === 1 ? '' : 's') + '</b>';
-      $('trackMark').setAttribute('title', 'The State\'s official map ends on ' + fmtDate(end));
+      $('trackNote').innerHTML = icon('flag') + 'Official map ends';
+      $('trackNote').setAttribute('data-tip', 'California\'s official map ends ' + fmtDate(end) + '. NISAR adds ' + more + ' more month' + (more === 1 ? '' : 's') + ', shown in yellow.');
+      $('trackNote').setAttribute('data-tip-pos', 'top');
     }
   }
   function timelineAt(i) {
@@ -1898,7 +1980,7 @@
   function shareLink() {
     var url = String(location.href).split('#')[0] + '#' + encodeState();
     try { history.replaceState(null, '', '#' + encodeState()); } catch (e) { /* file:// in some browsers */ }
-    function done(ok) { toast(ok ? 'Link to this view copied' : 'The link to this view is in the address bar'); }
+    function done(ok) { toast(ok ? 'Link copied' : 'Link is in the address bar'); }
     function legacy() {
       try {
         var t = document.createElement('textarea'); t.value = url; t.setAttribute('readonly', ''); t.style.position = 'fixed'; t.style.opacity = '0';
@@ -1944,25 +2026,116 @@
   }
   function exportNow(kind) {
     var s = state.site;
-    if (!s || !s.grid) { toast('This place has no cell data to download'); return; }
+    if (!s || !s.grid) { toast('No cell data here'); return; }
     var name = 'groundline_' + s.id + '_' + s.dates[state.i] + (kind === 'csv' ? '.csv' : '.geojson');
     try {
       var blob = new Blob([exportText(kind)], { type: kind === 'csv' ? 'text/csv' : 'application/geo+json' }), a = document.createElement('a');
       a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); document.body.removeChild(a);
       setTimeout(function () { URL.revokeObjectURL(a.href); }, 4000);
-      toast('Downloaded ' + name);
-    } catch (e) { toast('The download could not be started'); }
+      toast('Saved ' + name);
+    } catch (e) { toast('Download failed'); }
     closeMenus();
   }
   function exportNoteFor(s) {
-    var k = group3(obsEntry(s.id));
-    $('exportNote').textContent = s.id === 'sjv' && TRUST ? 'Confirmed cells carry a value. Farmland is listed as filtered, without one.'
-      : k === 'checked' ? 'Values at the date on the timeline.' : 'Not yet checked on the ground; crop areas may need filtering.';
+    var k = group3(obsEntry(s.id)), note = s.id === 'sjv' && TRUST ? ' Confirmed cells carry a value; farmland is listed as filtered, without one.'
+      : k === 'checked' ? ' Values at the date on the timeline.' : ' Not yet checked on the ground; crop areas may need filtering.';
+    $('exportCsv').setAttribute('data-tip', 'One row per map cell: centre, value, status.' + note);
+    $('exportGeo').setAttribute('data-tip', 'Points with a value, for a GIS.' + note);
+  }
+
+  // ----- tooltips: one component for every control with a data-tip attribute.
+  // Shown after a short delay on hover (no delay when moving between neighbouring controls), at once on keyboard focus,
+  // after a long press on touch screens; placed to stay on screen, with an arrow; dismissed with Escape; wired with aria-describedby.
+  var tipEl = null, tipFor = null, tipTimer = null, tipGone = 0, tipTouch = null;
+  function tipTarget(n) {
+    while (n && n.nodeType === 1) { if (n.getAttribute('data-tip')) return n; n = n.parentNode; }
+    return null;
+  }
+  function tipShow(t) {
+    var text = t.getAttribute('data-tip');
+    if (!text || !tipEl) return;
+    if (tipFor && tipFor !== t) tipFor.removeAttribute('aria-describedby');
+    tipFor = t; tipEl.firstChild.textContent = text;
+    t.setAttribute('aria-describedby', 'tip');
+    var r = t.getBoundingClientRect(), W = window.innerWidth, H = window.innerHeight, gap = 10, pos = t.getAttribute('data-tip-pos') || 'bottom';
+    tipEl.style.left = '0px'; tipEl.style.top = '0px';
+    var w = tipEl.offsetWidth, hh = tipEl.offsetHeight, x, y, arrow = tipEl.lastChild;
+    if (pos === 'bottom' && r.bottom + gap + hh > H - 4) pos = 'top';
+    else if (pos === 'top' && r.top - gap - hh < 4) pos = 'bottom';
+    else if (pos === 'right' && r.right + gap + w > W - 4) pos = 'left';
+    else if (pos === 'left' && r.left - gap - w < 4) pos = 'right';
+    if (pos === 'top' || pos === 'bottom') {
+      x = Math.max(6, Math.min(W - w - 6, r.left + r.width / 2 - w / 2)); y = pos === 'bottom' ? r.bottom + gap : r.top - gap - hh;
+      arrow.style.left = Math.max(10, Math.min(w - 10, r.left + r.width / 2 - x)) + 'px'; arrow.style.top = '';
+    } else {
+      y = Math.max(6, Math.min(H - hh - 6, r.top + r.height / 2 - hh / 2)); x = pos === 'right' ? r.right + gap : r.left - gap - w;
+      arrow.style.top = Math.max(10, Math.min(hh - 10, r.top + r.height / 2 - y)) + 'px'; arrow.style.left = '';
+    }
+    tipEl.style.left = Math.round(x) + 'px'; tipEl.style.top = Math.round(y) + 'px';
+    tipEl.setAttribute('data-pos', pos);
+    tipEl.classList.add('on');
+  }
+  function tipHide() {
+    clearTimeout(tipTimer);
+    if (!tipFor) return;
+    tipFor.removeAttribute('aria-describedby'); tipFor = null;
+    tipEl.classList.remove('on'); tipGone = Date.now();
+  }
+  function initTips() {
+    tipEl = $('tip');
+    if (!tipEl || !tipEl.firstChild || !document.body) return;
+    document.addEventListener('pointerover', function (e) {
+      if (e.pointerType === 'touch') return;
+      var t = tipTarget(e.target);
+      clearTimeout(tipTimer);
+      if (!t) { tipHide(); return; }
+      if (t === tipFor) return;
+      var wait = tipFor || Date.now() - tipGone < 400 ? 0 : 350;        // moving between neighbours: no delay
+      if (wait) tipTimer = setTimeout(function () { tipShow(t); }, wait); else tipShow(t);
+    });
+    document.documentElement.addEventListener('pointerleave', tipHide);
+    document.addEventListener('pointerdown', function (e) { if (e.pointerType !== 'touch') tipHide(); });
+    document.addEventListener('focusin', function (e) {
+      var t = tipTarget(e.target), kb = true;
+      try { kb = e.target.matches(':focus-visible'); } catch (err) { /* older browser: show on every focus */ }
+      if (t && kb) tipShow(t);
+    });
+    document.addEventListener('focusout', tipHide);
+    document.addEventListener('keydown', function (e) { if (e.key === 'Escape') tipHide(); });
+    document.addEventListener('scroll', tipHide, true);
+    // touch: a long press shows the tooltip, so nothing is hidden where hover does not exist
+    document.addEventListener('touchstart', function (e) {
+      var t = tipTarget(e.target);
+      clearTimeout(tipTouch); tipHide();
+      if (t) tipTouch = setTimeout(function () { tipShow(t); tipTouch = setTimeout(tipHide, 2600); }, 450);
+    }, { passive: true });
+    document.addEventListener('touchmove', function () { if (!tipFor) clearTimeout(tipTouch); }, { passive: true });
+    document.addEventListener('touchend', function () { if (!tipFor) clearTimeout(tipTouch); }, { passive: true });
+  }
+  // ----- the value under the pointer follows it on the map: the map itself says it can be read and clicked
+  function initHover() {
+    if (!map) return;
+    var chip = $('hoverChip');
+    map.on('mousemove', function (e) {
+      var s = state.site, g = s && s.grid, b, col, row, k, v, cls = 1;
+      if (!g || state.view === '3d' || !e || !e.latlng || !e.containerPoint) { chip.classList.remove('on'); return; }
+      b = s.overlay.bounds; col = Math.floor((e.latlng.lng - b[0][1]) / (b[1][1] - b[0][1]) * g.width);
+      row = Math.floor((mercY(b[1][0]) - mercY(e.latlng.lat)) / (mercY(b[1][0]) - mercY(b[0][0])) * g.height);
+      if (!(col >= 0 && row >= 0 && col < g.width && row < g.height)) { chip.classList.remove('on'); return; }
+      k = row * g.width + col; v = gridFrames(s)[state.i][k];
+      if (s.id === 'sjv' && TRUST && state.shade && !(state.compare && e.containerPoint.x < state.swipe * ($('mapWrap').clientWidth || 1))) cls = trustMask()[k];
+      if (v === g.nodata || cls > 2 || cls === 0) { chip.classList.remove('on'); return; }
+      chip.textContent = cls === 2 ? 'filtered' : cm(v * g.step_cm) + ' cm';
+      chip.style.transform = 'translate(' + Math.round(e.containerPoint.x + 14) + 'px,' + Math.round(e.containerPoint.y + 16) + 'px)';
+      chip.classList.add('on');
+    });
+    map.on('mouseout', function () { chip.classList.remove('on'); });
   }
 
   function initShell() {
     ui.panelOpen = true;
     $('panelToggle').addEventListener('click', function () { setPanel(!ui.panelOpen); });
+    $('backBtn').addEventListener('click', function () { runStep('overview'); });
     $('layersBtn').addEventListener('click', function (e) { if (e && e.stopPropagation) e.stopPropagation(); toggleMenu('layersBtn', 'layersMenu'); });
     $('exportBtn').addEventListener('click', function (e) { if (e && e.stopPropagation) e.stopPropagation(); toggleMenu('exportBtn', 'exportMenu'); });
     Array.prototype.forEach.call(document.querySelectorAll('[data-export]'), function (b) { b.addEventListener('click', function () { exportNow(b.getAttribute('data-export')); }); });
@@ -1971,8 +2144,8 @@
       while (t && t !== document.body) { if (t.classList && (t.classList.contains('menu') || t.classList.contains('search'))) return; t = t.parentNode; }
       closeMenus();
     });
-    $('zoomIn').addEventListener('click', function () { var m = inWorld() ? world : map; if (m) m.zoomIn(1); });
-    $('zoomOut').addEventListener('click', function () { var m = inWorld() ? world : map; if (m) m.zoomOut(1); });
+    $('zoomIn').addEventListener('click', function () { var m = inWorld() ? world : map; if (state.view === '3d' && !inWorld() && view3d) view3d.zoom(0.8); else if (m) m.zoomIn(1); });
+    $('zoomOut').addEventListener('click', function () { var m = inWorld() ? world : map; if (state.view === '3d' && !inWorld() && view3d) view3d.zoom(1.25); else if (m) m.zoomOut(1); });
     $('worldBtn').addEventListener('click', function () { if (inWorld()) goPlace(state.site ? state.site.id : ORDER[0]); else goWorld(null); });
     $('shareBtn').addEventListener('click', shareLink);
     $('tourBtn').addEventListener('click', startTour);
@@ -1990,7 +2163,13 @@
     });
     var mid = ramp(-0.62), up = ramp(0.6), rgb = function (c) { return 'rgb(' + Math.round(c[0]) + ',' + Math.round(c[1]) + ',' + Math.round(c[2]) + ')'; };
     if (root.style && root.style.setProperty) { root.style.setProperty('--radar', rgb(mid)); root.style.setProperty('--sink', rgb(mid)); root.style.setProperty('--gps', rgb(up)); root.style.setProperty('--rise', rgb(up)); }
-    initSearch(); initSwipe();
+    initSearch(); initSwipe(); initTips(); initHover();
+    $('attrBtn').addEventListener('click', function (e) {
+      if (e && e.stopPropagation) e.stopPropagation();
+      var m = inWorld() ? world : map, c = m && m.attributionControl && m.attributionControl.getContainer ? m.attributionControl.getContainer() : null;
+      $('attrBox').innerHTML = (c && typeof c.innerHTML === 'string' && c.innerHTML ? c.innerHTML + '. ' : '') + 'Radar: NISAR (NASA/ISRO) via ASF DAAC.';
+      toggleMenu('attrBtn', 'attrBox');
+    });
     var G = window.Groundline3D;                                   // the 3D surface uses the same colour ramp as the map and the legend
     if (G && G.math) G.math.colour = function (v, vmax, out, o) { var c = ramp(Math.max(-1, Math.min(1, v / vmax))); out[o] = c[0] / 255; out[o + 1] = c[1] / 255; out[o + 2] = c[2] / 255; };
   }
@@ -2049,7 +2228,7 @@
     });
     var rz; window.addEventListener('resize', function () {
       clearTimeout(rz); rz = setTimeout(function () {
-        if (state.sel) renderDetail(); else if (ui.step === 'crops' && ui.box === 'step') cropsChart();
+        if (state.sel) renderDetail(); else if (ui.step === 'crops' && ui.box === 'step') cropsChart(); else if (ui.step === 'overview' && ui.box === 'step' && state.site) overviewCharts(state.site);
         if (map) map.invalidateSize(false); if (world && inWorld()) world.invalidateSize(false);
         if (view3d && state.view === '3d') view3d.resize();
         tr.style.setProperty('--w', (tr.clientWidth || 0) + 'px'); markSteps(); updateSwipe();

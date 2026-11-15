@@ -39,16 +39,22 @@ function request(b, w) {
 (async () => {
   fs.mkdirSync(out, { recursive: true });
   const meta = {};
-  for (const [name, v] of Object.entries(VIEWS)) {
+  const only = process.argv.includes('--textures-only');      // skip the big view pictures
+  for (const [name, v] of Object.entries(only ? {} : VIEWS)) {
     const q = request(v, v[2]), buf = await get(q.url, name);
     fs.writeFileSync(path.join(out, name + '.jpg'), buf);
     meta[name] = { file: 'base/' + name + '.jpg', bounds: [v[0], v[1]], width: v[2], height: q.h };
     console.log(name + '.jpg ' + v[2] + 'x' + q.h + ', ' + (buf.length / 1e6).toFixed(2) + ' MB');
   }
   const q = request(SJV_GRID, SJV_GRID[2]), tex = await get(q.url, 'sjv texture');
-  fs.writeFileSync(path.join(out, 'views.js'), '// Written by pipeline/fetch_base_imagery.js. Base imagery: Sentinel-2 cloudless 2016 by EOX IT Services GmbH (https://s2maps.eu), CC BY 4.0.\n' +
+  if (!only) fs.writeFileSync(path.join(out, 'views.js'), '// Written by pipeline/fetch_base_imagery.js. Base imagery: Sentinel-2 cloudless 2016 by EOX IT Services GmbH (https://s2maps.eu), CC BY 4.0.\n' +
     'window.BASE_VIEWS = ' + JSON.stringify(meta) + ';\nwindow.BASE_CREDIT = "Sentinel-2 cloudless 2016 by EOX IT Services GmbH (s2maps.eu), CC BY 4.0. Contains modified Copernicus Sentinel data 2016.";\n');
   fs.writeFileSync(path.join(out, 'sjv_texture.js'), '// Written by pipeline/fetch_base_imagery.js: the valley picture cropped to the data/sjv.js grid, as a data URI (a file:// picture cannot be used as a WebGL texture).\n' +
     'window.BASE_TEXTURE = { sjv: "data:image/jpeg;base64,' + tex.toString('base64') + '" };\n');
   console.log('sjv_texture.js ' + SJV_GRID[2] + 'x' + q.h + ', ' + (tex.length / 1e6).toFixed(2) + ' MB');
+  // Mexico City, cropped to the data/mexico_city.js grid, for the online app's 3D view
+  const MX = [[19.1, -99.4], [19.85, -98.75], 900], qm = request(MX, MX[2]), tm = await get(qm.url, 'mexico texture');
+  fs.writeFileSync(path.join(__dirname, '..', 'site', 'base', 'mexico_texture.js'), '// Written by pipeline/fetch_base_imagery.js: Sentinel-2 cloudless 2016 by EOX (CC BY 4.0), cropped to the data/mexico_city.js grid.\n' +
+    'window.BASE_TEXTURE = window.BASE_TEXTURE || {}; window.BASE_TEXTURE.mexico_city = "data:image/jpeg;base64,' + tm.toString('base64') + '";\n');
+  console.log('mexico_texture.js ' + MX[2] + 'x' + qm.h + ', ' + (tm.length / 1e6).toFixed(2) + ' MB');
 })().catch(e => { console.error('FAILED', e.message); process.exit(1); });

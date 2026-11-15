@@ -31,28 +31,33 @@ The main demo is the San Joaquin Valley. Mexico City is the supporting, best-che
 
 Open `site/index.html` in a browser (or the published page). It is an explorer, opened on the San Joaquin Valley:
 
-- **Search** "Is my place mapped?": matches come from the mapped places and the catalogue of known sinking places.
+- **Search** ("Find a place"): matches come from the mapped places and the catalogue of known sinking places.
   A place that is known but not mapped gets an honest "not mapped yet" card, with the published figure if there is one.
 - **Map** with a **timeline** (play, scrub, and a marker where the State's official map ends), a **Map / 3D** switch, and
   **layers**: farmland filter (confirmed map or quick map), a swipe divider to compare the two, GPS stations,
   canals/roads/rail, satellite or plain base map.
-- **Side panel** (a bottom sheet on phones): one status line, the key figure, the chart for a clicked spot or GPS station,
-  and "Details and limits", collapsed.
-- **Share** copies a link that restores the place, date, view, layers and selected point (all in the URL hash).
-- **Download data**: the current place as CSV or GeoJSON (cell centre, value, status). Filtered farmland is listed
+- **Side panel** (a bottom sheet on phones): the place, a status badge, the key figure, the chart for a clicked spot or
+  GPS station, and "Details", collapsed. Most controls are icons; each has a tooltip (hover, keyboard focus, or a long
+  press on touch screens) that carries the explanation.
+- **Share** (icon, top right) copies a link that restores the place, date, view, layers and selected point (all in the URL hash).
+- **Download** (icon in the panel): the current place as CSV or GeoJSON (cell centre, value, status). Filtered farmland is listed
   without a value.
-- **Take the 60-second tour** runs the six-step story as an overlay (arrow keys or Next/Back, Esc to leave) and returns
+- **Tour** (the yellow button in the panel) runs the six-step story as an overlay (arrow keys or Next/Back, Esc to leave) and returns
   to the explorer as it was.
 - `site/classic.html` is the earlier, more detailed version of the page, kept as a fallback (code in `site/classic/`).
 
 No server and no build step are needed, and the same folder works on GitHub Pages. Libraries (`site/vendor/`), fonts
-(`site/fonts/`) and a base picture (`site/base/`) are bundled, so the page also opens offline; live map tiles are used
-when they load.
+(`site/fonts/`) and base pictures (`site/base/`) are bundled, so the page also opens offline. A view uses one imagery
+source: the bundled picture while it covers the whole view sharply enough, live map tiles once you zoom in or pan past it.
+The 3D view drapes a bundled picture for the San Joaquin Valley and Mexico City; elsewhere it uses live tiles only if
+every tile loads, and a plain dark surface otherwise. Cells without radar data show the imagery, never a hole.
 
 **Design.** Palette and typefaces follow the NASA Space Apps brand guidance (deep blues, white type, Neon Yellow as an
 accent; Fira Sans for headings, Overpass for body, both SIL Open Font License, licence texts in `site/fonts/`). No NASA
 or Space Apps marks are used. Colour, type, spacing, radius, elevation and motion tokens are at the top of
-`site/style.css`; motion honours `prefers-reduced-motion`.
+`site/style.css`; motion honours `prefers-reduced-motion`. The change ramp is shared by the map, legend, markers, charts,
+3D surface and the presentation: sinking runs from pale amber (a little) through orange and red to crimson (the most),
+so more sinking is always the hotter, darker colour; rising runs from teal to pale aqua. Neither uses Neon Yellow.
 
 ## Presentation build (offline)
 
