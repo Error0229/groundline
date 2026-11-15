@@ -1,0 +1,3 @@
+// Written by pipeline/fetch_base_imagery.js. Base imagery: Sentinel-2 cloudless 2016 by EOX IT Services GmbH (https://s2maps.eu), CC BY 4.0.
+window.BASE_VIEWS = {"world":{"file":"base/world.jpg","bounds":[[-58,-180],[74,180]],"width":3072,"height":1570},"valley":{"file":"base/valley.jpg","bounds":[[33.6,-124.6],[39.4,-115.1]],"width":2880,"height":2189},"madera":{"file":"base/madera.jpg","bounds":[[36.42,-121.2],[37.5,-118.9]],"width":2560,"height":1504},"mexico":{"file":"base/mexico.jpg","bounds":[[18.7,-100.45],[20.25,-97.7]],"width":2560,"height":1531}};
+window.BASE_CREDIT = "Sentinel-2 cloudless 2016 by EOX IT Services GmbH (s2maps.eu), CC BY 4.0. Contains modified Copernicus Sentinel data 2016.";

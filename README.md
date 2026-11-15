@@ -27,12 +27,32 @@ The main demo is the San Joaquin Valley. Mexico City is the supporting, best-che
 | San Joaquin Valley, California | the decision case | vertical-equivalent change, 24 Nov 2025 to 14 Oct 2026, tied to GPS, with profiles along the Friant-Kern Canal, California Aqueduct, Delta-Mendota Canal, State Routes 99, 43 and 198, Interstate 5 and the high-speed rail alignment | the team's research export, converted by `pipeline/import_research_export.py` |
 | Mexico City | the showcase | line-of-sight change, 30 Oct 2025 to 13 Oct 2026, with GPS station MMX1 | `pipeline/refresh.py mexico_city`, end to end |
 
-Open `site/index.html` in a browser. It opens on the San Joaquin Valley with a guided tour: press **Next**, or use the
-right and left arrow keys (Page Down / Page Up from a presenter clicker also work), to run the whole pitch in six steps.
-`site/classic.html` is the earlier, more detailed version of the page, kept as a fallback (its code is in `site/classic/`).
- No server and no build step are needed; the same folder works on
-GitHub Pages. The page needs the internet only for the base map, the fonts and the optional live
-catalogue check.
+## The app
+
+Open `site/index.html` in a browser (or the published page). It is an explorer, opened on the San Joaquin Valley:
+
+- **Search** "Is my place mapped?": matches come from the mapped places and the catalogue of known sinking places.
+  A place that is known but not mapped gets an honest "not mapped yet" card, with the published figure if there is one.
+- **Map** with a **timeline** (play, scrub, and a marker where the State's official map ends), a **Map / 3D** switch, and
+  **layers**: farmland filter (confirmed map or quick map), a swipe divider to compare the two, GPS stations,
+  canals/roads/rail, satellite or plain base map.
+- **Side panel** (a bottom sheet on phones): one status line, the key figure, the chart for a clicked spot or GPS station,
+  and "Details and limits", collapsed.
+- **Share** copies a link that restores the place, date, view, layers and selected point (all in the URL hash).
+- **Download data**: the current place as CSV or GeoJSON (cell centre, value, status). Filtered farmland is listed
+  without a value.
+- **Take the 60-second tour** runs the six-step story as an overlay (arrow keys or Next/Back, Esc to leave) and returns
+  to the explorer as it was.
+- `site/classic.html` is the earlier, more detailed version of the page, kept as a fallback (code in `site/classic/`).
+
+No server and no build step are needed, and the same folder works on GitHub Pages. Libraries (`site/vendor/`), fonts
+(`site/fonts/`) and a base picture (`site/base/`) are bundled, so the page also opens offline; live map tiles are used
+when they load.
+
+**Design.** Palette and typefaces follow the NASA Space Apps brand guidance (deep blues, white type, Neon Yellow as an
+accent; Fira Sans for headings, Overpass for body, both SIL Open Font License, licence texts in `site/fonts/`). No NASA
+or Space Apps marks are used. Colour, type, spacing, radius, elevation and motion tokens are at the top of
+`site/style.css`; motion honours `prefers-reduced-motion`.
 
 ## Presentation build (offline)
 

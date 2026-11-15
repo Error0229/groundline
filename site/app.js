@@ -31,8 +31,7 @@
   var PLAIN = { vertical: 'up or down', los: 'toward or away from the satellite' };
   function plainQ(s) { return PLAIN[s.quantity.key] || s.quantity.short; }
 
-  var state = { site: null, i: 0, timer: null, sel: null, opacity: 0.9, view: '2d', plain: false, base: 'sat', mode3d: 'depth', shade: false };
-  try { if (localStorage.getItem('groundline-base') === 'map') state.base = 'map'; } catch (e) { /* not remembered */ }
+  var state = { site: null, i: 0, timer: null, sel: null, opacity: 0.9, view: '2d', plain: false, base: 'sat', mode3d: 'depth', shade: false, compare: false, swipe: 0.5, showGps: true, showLines: true };
   var map = null, tiles = null, overlay = null, overlayCache = {}, vectors = null, extras = {}, shapes = {}, gridCache = {}, liveCache = {}, view3d = null, view3dSite = null;
 
   // ---------- small helpers
@@ -50,10 +49,21 @@
   function cm(v, digits) { return v == null || !isFinite(v) ? 'n/a' : (v > 0 ? '+' : v < 0 ? '−' : '') + Math.abs(v).toFixed(digits == null ? 1 : digits); }
   function fmtR(r) { return r == null ? 'n/a' : r >= 0.995 ? r.toFixed(3) : r.toFixed(2); }
   function last(a) { for (var i = a.length - 1; i >= 0; i--) if (a[i] != null) return a[i]; return null; }
-  function colourFor(v, vmax) {
-    var t = Math.max(0, Math.min(1, (v / vmax + 1) / 2)) * (RDBU.length - 1), i = Math.min(Math.floor(t), RDBU.length - 2), f = t - i;
-    return 'rgb(' + [0, 1, 2].map(function (k) { return Math.round(RDBU[i][k] * (1 - f) + RDBU[i + 1][k] * f); }).join(',') + ')';
+  // One ramp for the map, the legend, the station markers, the charts and the 3D surface (the presentation build uses the same stops).
+  // Sinking: deep red through Rocket Red and orange to a pale "white-hot" peach, so the deepest sinking is the lightest, most salient
+  // thing on the dark base map. Rising: teal to pale aqua. Neither side uses Neon Yellow (reserved for the interface) or the blues of
+  // the interface. Warm against cool with lightness rising on both sides stays apart for red-green colour-blind viewers.
+  var SINK = [[196, 40, 8], [228, 55, 0], [255, 122, 24], [255, 208, 170]], RISE = [[0, 128, 150], [40, 196, 212], [188, 246, 250]];
+  function ramp(t) {                                    // t in [-1, 1]; -1 = deepest sinking
+    var st = t < 0 ? SINK : RISE, x = Math.min(1, Math.abs(t)) * (st.length - 1), i = Math.min(Math.floor(x), st.length - 2), f = x - i;
+    return [st[i][0] * (1 - f) + st[i + 1][0] * f, st[i][1] * (1 - f) + st[i + 1][1] * f, st[i][2] * (1 - f) + st[i + 1][2] * f];
   }
+  function rampStops() {
+    var out = [];
+    for (var k = 0; k <= 12; k++) { var c = ramp(k / 6 - 1); out.push('rgb(' + Math.round(c[0]) + ',' + Math.round(c[1]) + ',' + Math.round(c[2]) + ') ' + (k / 12 * 100).toFixed(1) + '%'); }
+    return out.join(',');
+  }
+  function colourFor(v, vmax) { var c = ramp(Math.max(-1, Math.min(1, v / vmax))); return 'rgb(' + Math.round(c[0]) + ',' + Math.round(c[1]) + ',' + Math.round(c[2]) + ')'; }
   function mercY(lat) { return Math.log(Math.tan(Math.PI / 4 + lat * Math.PI / 360)); }
   function niceStep(range, target) {
     var raw = range / target, p = Math.pow(10, Math.floor(Math.log10(raw))), n = raw / p;
@@ -61,32 +71,14 @@
   }
 
   // ---------- theme
-  function initTheme() {
-    var btn = $('themeBtn');
-    function label() { btn.textContent = document.documentElement.getAttribute('data-theme') === 'dark' ? 'Light' : 'Dark'; }
-    btn.addEventListener('click', function () {
-      var next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
-      document.documentElement.setAttribute('data-theme', next);
-      try { localStorage.setItem('groundline-theme', next); } catch (e) { /* private mode: not remembered */ }
-      label();
-      setBasemap();
-      if (view3d) view3d.restyle();
-    });
-    label();
-  }
-
   // ---------- place menu, headline, status label, guided steps
   var TRUST = window.SJV_TRUST || null;                       // San Joaquin cropland finding (site/data/sjv_trust.js)
   var ui = { step: null, box: 'step' }, has3d = false, zoomed = false;
   var CROP_CAVEAT = 'In California we found this radar reads several centimetres too deep over cropland. The same may apply here.';
-  var HEAD = {
-    start: 'A sinking-ground map from NASA\'s newest radar that only counts what it can confirm.',
-    world: 'Most of the world\'s sinking ground has no free map.'
-  };
   // The three states shown on the world map and as the status label of a place.
   var G3 = {
-    checked: { label: 'Checked against GPS', colour: '#2fbf71' },
-    measured: { label: 'Measured, not yet checked against GPS', colour: '#f5b700' },
+    checked: { label: 'Checked against GPS', colour: '#EAFE07' },
+    measured: { label: 'Measured, not yet checked against GPS', colour: '#2E96F5' },
     none: { label: 'Not measured yet', colour: '#ffffff' }
   };
   function group3(e) { return !e ? 'none' : e.status === 'validated' ? 'checked' : e.status === 'measured' ? 'measured' : 'none'; }
@@ -95,42 +87,9 @@
   function fullName(id) { var e = obsEntry(id) || {}, n = DATA[id].name; return n + (e.country && n.indexOf(e.country) < 0 && id !== 'sjv' ? ', ' + e.country : ''); }
 
   function buildSwitch() {
-    var sel = $('placeSelect'), g = { checked: [], measured: [] };
-    ORDER.forEach(function (id) { g[group3(obsEntry(id)) === 'checked' ? 'checked' : 'measured'].push(id); });
-    g.measured.sort(function (a, b) { return DATA[a].name < DATA[b].name ? -1 : 1; });
-    function opts(ids) { return ids.map(function (id) { return '<option value="' + esc(id) + '">' + esc(fullName(id)) + '</option>'; }).join(''); }
-    sel.innerHTML = '<option value="">All ' + ORDER.length + ' places…</option>' +
-      '<optgroup label="Checked against GPS">' + opts(g.checked) + '</optgroup>' +
-      (g.measured.length ? '<optgroup label="Measured, not yet checked">' + opts(g.measured) + '</optgroup>' : '') +
-      (OBS.length ? '<option value="world">World map</option>' : '');
-    sel.addEventListener('change', function (ev) {
-      var v = ((ev && ev.target) || sel).value;
-      if (v === 'world') openAct('world'); else if (v) openAct(v);
-      if (sel.blur) sel.blur();
-    });
-    Array.prototype.forEach.call(document.querySelectorAll('#acts [data-act]'), function (b) {
-      b.addEventListener('click', function () { openAct(b.getAttribute('data-act')); });
-    });
-    var brand = $('brand');
-    brand.addEventListener('click', function (e) { if (e && e.preventDefault) e.preventDefault(); tourGo(0); });
+    $('brand').addEventListener('click', function (e) { if (e && e.preventDefault) e.preventDefault(); goPlace(DATA.sjv ? 'sjv' : ORDER[0]); });
   }
-  // Open a place or the world: through the tour when it is part of the story, directly otherwise.
-  function openAct(id) {
-    var i = -1;
-    TOUR.forEach(function (t, k) { if (i < 0 && (id === 'world' ? t.world : t.site === id)) i = k; });
-    if (i >= 0) { tourGo(i); return; }
-    if (id === 'world') { showWorld(); renderTour(); return; }
-    document.documentElement.setAttribute('data-mode', 'site');
-    selectSite(id); renderTour();
-  }
-  function markActs() {
-    var cur = inWorld() ? 'world' : state.site ? state.site.id : '';
-    Array.prototype.forEach.call(document.querySelectorAll('#acts [data-act]'), function (b) {
-      if (b.getAttribute('data-act') === cur) b.setAttribute('aria-current', 'true'); else b.removeAttribute('aria-current');
-    });
-    var sel = $('placeSelect'); sel.value = cur; if (sel.selectedIndex < 0) sel.selectedIndex = 0;
-    $('headline').textContent = HEAD[cur] || HEAD.start;
-  }
+  function markActs() { $('worldBtn').setAttribute('aria-pressed', inWorld() ? 'true' : 'false'); }
 
   var CROP_SHORT = 'Not yet checked on the ground; crop areas may need filtering.';
   // The one heading of the panel, and the text that belongs under "Details and limits" for the current view.
@@ -143,7 +102,7 @@
   }
   function chartH() {                                        // the chart takes the room the removed text left
     var w = window.innerWidth || 1280, hh = window.innerHeight || 720;
-    return w < 900 ? 210 : Math.max(170, Math.min(440, hh - 424));
+    return w < 760 ? 190 : Math.max(170, Math.min(330, hh - 520));
   }
   function peakOf(s) { var e = obsEntry(s.id) || {}; return e.peak_change_cm != null ? e.peak_change_cm : s.extreme ? Math.abs(s.extreme.min_cm) : null; }
   function placeHead(s) {
@@ -152,7 +111,7 @@
     $('placeKicker').textContent = fullName(s.id);
     if (s.id === 'sjv' && TRUST) {
       chip.className = 'status mixed';
-      chip.textContent = 'Checked on the ground · crop signal filtered out';
+      chip.innerHTML = 'Checked on the ground<span class="sep">&middot;</span>crop signal filtered out';
     } else {
       chip.className = 'status ' + (k === 'checked' ? 'ok' : 'warn');
       chip.textContent = k === 'checked' ? 'Checked against GPS' + (operaAgrees(OPERA[s.id]) ? ' and NASA\'s own map' : '') : G3.measured.label;
@@ -163,35 +122,43 @@
 
   // The obvious buttons of a place. San Joaquin has its own three, because its story is the cropland finding.
   function stepDefs(s) {
-    var d = [], I = IMPACT[s.id];
-    d.push(['play', s.span_days >= 300 ? 'Play the year' : 'Play the ' + months(s) + ' months', 'Play']);
-    var sj = s.id === 'sjv' && TRUST;
-    if (tourStation(s)) d.push(['gps', sj ? 'Is it right? Check a town' : 'Check it against GPS', sj ? 'Town' : 'GPS']);
-    if (sj) d.push(['crops', 'Now look at the fields', 'Fields']);
+    var d = [['overview', 'Overview', 'Overview']], I = IMPACT[s.id], sj = s.id === 'sjv' && TRUST;
+    if (tourStation(s)) d.push(['gps', sj ? 'Is it right? Check a town against GPS' : 'Check it against GPS', sj ? 'Town check' : 'GPS check']);
+    if (sj) d.push(['crops', 'Why farmland is filtered out', 'Farmland']);
     if (I && I.exposure) d.push(['people', sj ? 'What we can confirm' : 'Who lives on it', sj ? 'Confirmed' : 'People']);
     return d;
   }
   function buildSteps(s) {
     var box = $('steps'); box.innerHTML = '';
-    stepDefs(s).forEach(function (d, i) {
-      var b = h('button', { type: 'button', 'class': 'step', 'data-step': d[0], 'aria-pressed': 'false', title: d[1], 'aria-label': d[1] }, '<b>' + (i + 1) + '</b><span>' + esc(d[2]) + '</span>');
+    stepDefs(s).forEach(function (d) {
+      var b = h('button', { type: 'button', 'class': 'step', role: 'tab', 'data-step': d[0], 'aria-pressed': 'false', title: d[1] }, '<span>' + esc(d[2]) + '</span>');
       b.addEventListener('click', function () { stepClick(s.id, d[0]); });
       box.appendChild(b);
     });
+    box.appendChild(h('i', { 'class': 'tab-ind', 'aria-hidden': 'true' }));
   }
   function stepClick(siteId, step) {
-    var i = tourIndex(siteId, step);
+    var i = tour.active ? tourIndex(siteId, step) : -1;
     if (i >= 0) tourGo(i); else runStep(step);
   }
+  // The indicator glides to the selected tab.
   function markSteps() {
+    var ind = null, on = null;
     Array.prototype.forEach.call($('steps').children, function (b) {
       var k = b.getAttribute('data-step');
-      b.setAttribute('aria-pressed', (k === '3d' ? state.view === '3d' : k === ui.step) ? 'true' : 'false');
+      if (!k) { ind = b; return; }
+      var sel = k === ui.step;
+      b.setAttribute('aria-pressed', sel ? 'true' : 'false');
+      if (sel) on = b;
     });
+    if (!ind || !ind.style) return;
+    if (on && on.offsetWidth) { ind.style.width = on.offsetWidth + 'px'; ind.style.transform = 'translateX(' + on.offsetLeft + 'px)'; ind.style.opacity = '1'; }
+    else ind.style.opacity = '0';
   }
   function showBox(which) {
     ui.box = which;
     $('stepBox').hidden = which !== 'step'; $('detail').hidden = which !== 'detail'; $('impact').hidden = which !== 'impact';
+    if (which !== 'detail') { ui.freshKey = null; fresh($(which === 'impact' ? 'impact' : 'stepBox')); countUps($(which === 'impact' ? 'impact' : 'stepBox')); }
   }
   function runStep(step) {
     var s = state.site;
@@ -199,28 +166,43 @@
     if (step !== 'play' && step !== '3d') stop();
     if (step === 'gps') {
       var g = tourStation(s);
-      if (s.id === 'sjv') setShade(false);
+      if (s.id === 'sjv' && tour.active) setShade(false);
       if (g) { select({ type: 'gps', id: g.id }); if (map && s.id === 'sjv') { zoomed = true; map.flyTo([g.lat, g.lon], 10.5, { duration: 1.2 }); } }
     } else {
       select(null);
-      if (zoomed && map) { zoomed = false; map.flyToBounds(s.overlay.bounds, { padding: [4, 4], duration: 0.8 }); }
+      if (zoomed && map) { zoomed = false; map.flyToBounds(s.overlay.bounds, merge(pad(), { duration: 0.8 })); }
       if (step === 'people') { if (s.id === 'sjv') setShade(true); impactPanel(s); showBox('impact'); }
       else {
-        if (step === 'intro') { if (s.id === 'sjv') setShade(false); introBox(); }
+        if (step === 'overview') overviewBox(s);
+        else if (step === 'intro') { if (s.id === 'sjv') setShade(false); introBox(); }
         else if (step === 'play') { if (s.id === 'sjv') setShade(false); playBox(s); stop(); play(); }
         else if (step === 'crops') { cropsBox(); setShade(true, true); }
         showBox('step');
         if (step === 'crops') cropsChart();      // drawn once the box is visible and has a width
       }
     }
-    markSteps();
+    markSteps(); syncHash();
   }
   // What a place shows before any button is pressed.
-  function defaultBox(s) {
-    ui.step = null;
-    if (s.id === 'sjv') { introBox(); showBox('step'); }
-    else { playBox(s); showBox('step'); }
-    markSteps();
+  function defaultBox(s) { ui.step = 'overview'; overviewBox(s); showBox('step'); markSteps(); }
+
+  // The explorer's first view of a place: one status line (above), one key figure, and who lives on it where the data supports that.
+  function overviewBox(s) {
+    var I = IMPACT[s.id], k = group3(obsEntry(s.id)), peak = peakOf(s), sj = s.id === 'sjv' && TRUST, html = '';
+    var g5 = I && I.exposure && I.exposure.people && I.exposure.people.ge_5cm;
+    if (sj) {
+      setHeading('Confirmed sinking ground');
+      html = bignum('<small>at least</small>' + num(TRUST.people.ge_5cm_floor, 'int'), 'people on ground that sank 5&nbsp;cm or more', 'huge') +
+        '<p class="plain">Towns and open land only. <b>Farmland is filtered out</b> and never counted.</p>';
+    } else {
+      setHeading(peak == null ? 'Ground movement over ' + months(s) + ' months' : 'Deepest sinking in ' + months(s) + ' months');
+      if (peak != null) html += bignum(num(peak, peak >= 20 ? 'n' : 'fix1') + ' cm', 'at the fastest-sinking spot', 'huge');
+      if (g5 && g5.people >= 1000) html += bignum('<small>' + (k === 'checked' ? 'about' : 'unchecked estimate') + '</small>' + fmtPeople(g5.people), 'people on ground that sank 5&nbsp;cm or more', 'second');
+    }
+    html += '<p class="hintline"><i></i>Click the map or a station to read that spot.</p>';
+    $('stepBox').innerHTML = html;
+    setNotes('<p class="note">Warm colours are sinking, blue is rising. ' + s.dates.length + ' passes of the NISAR radar, ' + fmtDate(s.dates[0]) + ' to ' + fmtDate(s.dates[s.dates.length - 1]) +
+      '. Drag the timeline or press play to watch the change build up.' + (sj ? ' Mainly ' + TRUST.people.mostly.slice(0, 3).map(function (m) { return esc(m[0]); }).join(', ') + '.' : '') + '</p>');
   }
 
   function kpi(v, l) { return '<div class="kpi"><div class="v">' + v + '</div><div class="l">' + l + '</div></div>'; }
@@ -251,7 +233,7 @@
   // San Joaquin, the key step: fields read lower than the town they surround.
   function cropsBox() {
     var T = TRUST.towns, X = TRUST.excess_vs_state_cm;
-    setHeading('We found crops fool the radar');
+    setHeading('On farmland, a quick map reads too deep');
     $('stepBox').innerHTML = '<div class="kpis">' + kpi(T.n_fields_lower + ' of ' + T.n, 'towns') + kpi(cm(T.fields_minus_town_cm) + ' cm', 'fields against their town') + '</div>' +
       '<div class="chart-legend"><span><i style="border-color:var(--radar)"></i>Our map: fields minus town</span><span><i class="dash" style="border-color:var(--gps)"></i>State map: no gap</span></div><div class="chart"></div>';
     setNotes('<p class="note">Real sinking doesn\'t stop at the city limits. The gap opens in spring as the crops leaf out: the crops are fooling the radar. ' +
@@ -363,14 +345,13 @@
   // ---------- map
   function initMap() {
     if (!window.L) { $('map').innerHTML = '<div class="fallback"><div><p>The map library could not be loaded (offline?). Showing the data layer only.</p><img id="fallbackImg" alt="Displacement layer for the selected date"></div></div>'; return; }
-    map = L.map('map', { zoomSnap: 0.25, scrollWheelZoom: false, keyboard: false });
+    map = L.map('map', { zoomSnap: 0.25, zoomControl: false, keyboard: false });
+    underlay(map);
     map.attributionControl.addAttribution('Radar: NISAR previews via ASF DAAC');
     map.createPane('data'); map.getPane('data').style.zIndex = 350;
     map.createPane('trust'); map.getPane('trust').style.zIndex = 360; map.getPane('trust').style.pointerEvents = 'none';
     vectors = L.layerGroup().addTo(map);
     map.on('click', onMapClick);
-    map.on('focus', function () { map.scrollWheelZoom.enable(); });
-    map.on('blur', function () { map.scrollWheelZoom.disable(); });
     setBasemap();
     // A tile server can answer with an error picture that still "loads" (that is what the blocked tiles were).
     // One readable request tells us; if it is refused, drop the base map instead of showing error tiles.
@@ -381,6 +362,15 @@
     }
   }
 
+  // A bundled satellite picture sits under the live tiles, so a blocked or slow tile server never leaves holes in the map.
+  function underlay(m) {
+    var V = window.BASE_VIEWS;
+    if (!V) return;
+    m.createPane('under'); m.getPane('under').style.zIndex = 100; m.getPane('under').className += ' leaflet-under-pane';
+    ['world', 'valley', 'mexico'].forEach(function (k) { if (V[k]) L.imageOverlay(V[k].file, V[k].bounds, { pane: 'under', interactive: false }).addTo(m); });
+    m.attributionControl.setPrefix(false);
+    m.attributionControl.addAttribution('Base picture: Sentinel-2 cloudless by EOX (CC BY 4.0)');
+  }
   function setBasemap() {
     if (!map) return;
     if (tiles) { map.removeLayer(tiles); tiles = null; }
@@ -395,7 +385,6 @@
 
   function setBase(b) {
     state.base = b;
-    try { localStorage.setItem('groundline-base', b); } catch (e) { /* not remembered */ }
     setBasemap();
     if (state.site && vectors) { drawVectors(state.site); highlight(); }
     Array.prototype.forEach.call(document.querySelectorAll('[data-base]'), function (x) { x.setAttribute('aria-pressed', x.getAttribute('data-base') === b ? 'true' : 'false'); });
@@ -408,42 +397,45 @@
     tiles = null;
     var note = $('mapNote');
     note.hidden = false;
-    note.textContent = 'The base map could not be loaded, so the data is shown on a plain background. Place names, lines and stations still locate it.';
+    note.textContent = 'Live map tiles are blocked here, so a bundled satellite picture is shown instead.';
   }
 
   // Well-known cities, for orientation (San Joaquin's own place list is small farm towns that crowd the map).
   var CITY_LABELS = { sjv: [['Fresno', 36.7378, -119.7871], ['Madera', 36.9613, -120.0607], ['Merced', 37.3022, -120.483], ['Hanford', 36.3275, -119.6457], ['Visalia', 36.3302, -119.2921], ['Tulare', 36.2077, -119.3473]] };
   function lineStyle(kind) { return kind === 'canal' ? null : kind === 'rail' ? '2 7' : '9 6'; }
 
-  function rim() { return state.base === 'sat' && !state.plain ? '#ffffff' : '#1d1b17'; }   // marker outlines that read on the base map
+  function rim() { return '#ffffff'; }                         // marker outlines read on both base maps
 
   function drawVectors(s) {
     vectors.clearLayers(); shapes = {};
-    (s.alignments || []).forEach(function (a) {
+    (state.showLines ? s.alignments || [] : []).forEach(function (a) {
       var pts = a.lat.map(function (la, i) { return [la, a.lon[i]]; });
-      var casing = L.polyline(pts, { color: '#ffffff', weight: 4.5, opacity: 0.9, interactive: false });
-      var line = L.polyline(pts, { color: '#1d1b17', weight: 2, dashArray: lineStyle(a.kind), lineCap: 'butt', interactive: false });
+      var casing = L.polyline(pts, { color: '#07173F', weight: 5, opacity: 0.85, interactive: false });
+      var line = L.polyline(pts, { color: '#ffffff', weight: 1.6, dashArray: lineStyle(a.kind), lineCap: 'butt', interactive: false });
       var hit = L.polyline(pts, { color: '#000', weight: 18, opacity: 0 });
       hit.bindTooltip(a.name, { sticky: true });
       hit.on('click', function (e) { L.DomEvent.stopPropagation(e); select({ type: 'alignment', name: a.name }); });
       vectors.addLayer(casing); vectors.addLayer(line); vectors.addLayer(hit);
-      shapes['alignment:' + a.name] = { line: line, base: { color: '#1d1b17', weight: 2 } };
+      shapes['alignment:' + a.name] = { line: line, base: { color: '#ffffff', weight: 1.6 } };
     });
     var cities = CITY_LABELS[s.id];
     (cities || []).forEach(function (c) {
       vectors.addLayer(L.marker([c[1], c[2]], { interactive: false, keyboard: false, icon: L.divIcon({ className: 'city-label', html: '<span>' + esc(c[0]) + '</span>', iconSize: null }) }));
     });
     (s.places || []).forEach(function (p) {
-      var m = L.circleMarker([p.lat, p.lon], { radius: 3, color: '#1d1b17', weight: 1.5, fillColor: '#ffffff', fillOpacity: 1 });
+      var m = L.circleMarker([p.lat, p.lon], { radius: 3, color: '#07173F', weight: 1.5, fillColor: '#ffffff', fillOpacity: 1 });
       m.bindTooltip(p.name, cities ? { direction: 'right', offset: [5, 0] } : { permanent: true, direction: 'right', offset: [5, 0], className: 'place' });
       if (p.series_cm) m.on('click', function (e) { L.DomEvent.stopPropagation(e); select({ type: 'place', name: p.name }); });
       vectors.addLayer(m);
     });
-    (s.gps || []).forEach(function (g) {
+    (state.showGps ? s.gps || [] : []).forEach(function (g) {
       var total = last(g.gps_cm);                 // same quantity as the map, so fill and surroundings are comparable
+      vectors.addLayer(L.circleMarker([g.lat, g.lon], { radius: 11.5, stroke: false, fillColor: '#030B22', fillOpacity: 0.85, interactive: false }));
       var m = L.circleMarker([g.lat, g.lon], { radius: 8, color: rim(), weight: 2.5, fillColor: total == null ? '#999' : colourFor(total, s.overlay.vmax_cm), fillOpacity: 1 });
       m.bindTooltip('GPS ' + g.id + (total == null ? '' : ': ' + cm(total) + ' cm'), { direction: 'top', offset: [0, -8] });
       m.on('click', function (e) { L.DomEvent.stopPropagation(e); select({ type: 'gps', id: g.id }); });
+      m.on('mouseover', function () { m.setStyle({ radius: 10.5, weight: 3 }); });
+      m.on('mouseout', function () { highlight(); });
       vectors.addLayer(m);
       shapes['gps:' + g.id] = { marker: m };
     });
@@ -452,8 +444,8 @@
   function highlight() {
     Object.keys(shapes).forEach(function (k) {
       var sh = shapes[k], on = state.sel && (state.sel.type + ':' + (state.sel.name || state.sel.id)) === k;
-      if (sh.line) sh.line.setStyle(on ? { color: '#b7791f', weight: 5 } : sh.base);
-      if (sh.marker) sh.marker.setStyle(on ? { radius: 11, color: '#b7791f', weight: 4 } : { radius: 8, color: rim(), weight: 2.5 });
+      if (sh.line) sh.line.setStyle(on ? { color: '#EAFE07', weight: 4 } : sh.base);
+      if (sh.marker) sh.marker.setStyle(on ? { radius: 11.5, color: '#EAFE07', weight: 4 } : { radius: 8, color: rim(), weight: 2.5 });
     });
   }
 
@@ -463,7 +455,7 @@
     var a = Math.abs(v), n = noise || 0;
     if (a <= n) return 0;
     var edge = Math.min(1, (a - n) / Math.max(0.25 * n, 0.05));
-    return edge * edge * (3 - 2 * edge) * 0.95 * Math.min(1, a / (0.75 * vmax));   // pale colours (small changes) stay faint
+    return edge * edge * (3 - 2 * edge) * 0.95 * Math.min(1, 0.3 + 0.7 * a / (0.75 * vmax));   // pale colours (small changes) stay faint
   }
 
   // The 2D layer for one date, drawn in the browser from the value grid so that changes inside the noise band are
@@ -479,10 +471,8 @@
     var img = ctx.createImageData(g.width, g.height), d = img.data;
     for (var k = 0; k < f.length; k++) {
       if (f[k] === g.nodata) continue;
-      var v = f[k] * g.step_cm, t = Math.max(0, Math.min(1, (v / vmax + 1) / 2)) * (RDBU.length - 1), q = Math.min(Math.floor(t), RDBU.length - 2), w = t - q;
-      d[4 * k] = RDBU[q][0] * (1 - w) + RDBU[q + 1][0] * w;
-      d[4 * k + 1] = RDBU[q][1] * (1 - w) + RDBU[q + 1][1] * w;
-      d[4 * k + 2] = RDBU[q][2] * (1 - w) + RDBU[q + 1][2] * w;
+      var v = f[k] * g.step_cm, col = ramp(Math.max(-1, Math.min(1, v / vmax)));
+      d[4 * k] = col[0]; d[4 * k + 1] = col[1]; d[4 * k + 2] = col[2];
       d[4 * k + 3] = 255 * tintAlpha(v, n, vmax);
     }
     ctx.putImageData(img, 0, 0);
@@ -500,45 +490,36 @@
     overlay = L.imageOverlay(overlayUrl(s, state.i), s.overlay.bounds, { opacity: state.opacity, className: 'disp' + (s.grid ? ' smooth' : ''), pane: 'data' }).addTo(map);
     drawVectors(s);
     map.invalidateSize(false);                     // the map may have been hidden (world view) and still think it is 0 x 0
-    map.fitBounds(s.overlay.bounds, { padding: [4, 4], animate: false });
-    setTimeout(function () { map.invalidateSize(false); map.fitBounds(s.overlay.bounds, { padding: [4, 4], animate: false }); }, 60);
+    var o = pad(), fly = mapShown && mapShown !== s.id && !inWorld() && !tour.active && !restoring && !reducedMotion();
+    if (fly) map.flyToBounds(s.overlay.bounds, merge(o, { duration: 1.6 }));      // between places: one flight
+    else {
+      map.fitBounds(s.overlay.bounds, merge(o, { animate: false }));
+      setTimeout(function () { map.invalidateSize(false); map.fitBounds(s.overlay.bounds, merge(pad(), { animate: false })); updateSwipe(); }, 60);
+    }
+    mapShown = s.id;
+    applyVis();
   }
 
+  // The less-used layers of a place: colour strength and its extra pictures (uncertainty and the like).
   function layerControls(s) {
     var row = $('layerRow'); row.innerHTML = '';
-    if (map && !state.plain) {
-      var seg = h('span', { 'class': 'seg', role: 'group', 'aria-label': 'Base map' });
-      [['sat', 'Satellite'], ['map', 'Map']].forEach(function (b) {
-        var x = h('button', { type: 'button', 'data-base': b[0], 'aria-pressed': state.base === b[0] ? 'true' : 'false' }, b[1]);
-        x.addEventListener('click', function () { setBase(b[0]); });
-        seg.appendChild(x);
+    $('gpsBox').hidden = !(s.gps || []).length; $('linesBox').hidden = !(s.alignments || []).length;
+    if (!map) return;
+    var op = h('label', { 'class': 'chip range' }, 'Colour strength <input type="range" min="20" max="100" step="5" value="' + Math.round(state.opacity * 100) + '" aria-label="Colour strength">');
+    op.querySelector('input').addEventListener('input', function (e) { state.opacity = e.target.value / 100; if (overlay) overlay.setOpacity(state.opacity); });
+    row.appendChild(op);
+    (s.extra_overlays || []).forEach(function (x) {
+      var c = h('label', { 'class': 'chip', title: x.note || '' }, '<input type="checkbox"> ' + esc(x.label));
+      c.querySelector('input').addEventListener('change', function (e) {
+        if (e.target.checked) extras[x.id] = L.imageOverlay(x.file, s.overlay.bounds, { opacity: x.id === 'zone' ? 1 : 0.85, className: 'disp', pane: 'data' }).addTo(map);
+        else if (extras[x.id]) { map.removeLayer(extras[x.id]); delete extras[x.id]; }
       });
-      row.appendChild(seg);
-    }
-    if (map) {
-      var op = h('label', { 'class': 'chip range' }, 'Colour strength <input type="range" min="20" max="100" step="5" value="' + Math.round(state.opacity * 100) + '" aria-label="Colour strength">');
-      op.querySelector('input').addEventListener('input', function (e) { state.opacity = e.target.value / 100; if (overlay) overlay.setOpacity(state.opacity); });
-      row.appendChild(op);
-      (s.extra_overlays || []).forEach(function (x) {
-        var c = h('label', { 'class': 'chip', title: x.note || '' }, '<input type="checkbox"> ' + esc(x.label));
-        c.querySelector('input').addEventListener('change', function (e) {
-          if (e.target.checked) extras[x.id] = L.imageOverlay(x.file, s.overlay.bounds, { opacity: x.id === 'zone' ? 1 : 0.85, className: 'disp', pane: 'data' }).addTo(map);
-          else if (extras[x.id]) { map.removeLayer(extras[x.id]); delete extras[x.id]; }
-        });
-        row.appendChild(c);
-      });
-    }
-    var kinds = {};
-    (s.alignments || []).forEach(function (a) { kinds[a.kind] = true; });
-    var names = { canal: 'canal', road: 'highway', rail: 'rail alignment' };
-    Object.keys(kinds).forEach(function (k) {
-      row.appendChild(h('span', { 'class': 'key' }, '<svg width="34" height="8" aria-hidden="true"><line x1="0" y1="4" x2="34" y2="4" stroke="currentColor" stroke-width="2.5"' + (lineStyle(k) ? ' stroke-dasharray="' + lineStyle(k) + '"' : '') + '/></svg>' + names[k]));
+      row.appendChild(c);
     });
-    if ((s.gps || []).length) row.appendChild(h('span', { 'class': 'key' }, '<svg width="16" height="16" aria-hidden="true"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="2.5"/></svg>GPS station, coloured by what it measured'));
   }
 
   function legend(s) {
-    var v = s.overlay.vmax_cm, n = s.noise.value_cm, stops = RDBU.map(function (c, i) { return 'rgb(' + c.join(',') + ') ' + (i * 10) + '%'; }).join(',');
+    var v = s.overlay.vmax_cm, n = s.noise.value_cm, stops = rampStops();
     var shade = s.id === 'sjv' && TRUST && state.shade, lg = $('legend');
     lg.innerHTML = '<div class="bar" style="background:linear-gradient(90deg,' + stops + ')"></div>' +
       '<div class="ticks"><span>−' + v + ' cm sinking</span><span>rising +' + v + ' cm</span></div>' +
@@ -553,7 +534,7 @@
   }
 
   // ---------- San Joaquin trust mask: cropland reads too deep, so it is shaded and not counted
-  var trustLayer = null, trustUrl = null, trustBytes = null, shadeTimer = null;
+  var trustBytes = null, shadeTimer = null;
   function trustMask() {
     if (!TRUST) return null;
     if (!trustBytes) { var bin = atob(TRUST.mask.data_b64); trustBytes = new Uint8Array(bin.length); for (var i = 0; i < bin.length; i++) trustBytes[i] = bin.charCodeAt(i); }
@@ -566,35 +547,83 @@
     if (col < 0 || row < 0 || col >= M.width || row >= M.height) return null;
     return trustMask()[row * M.width + col];
   }
-  function trustImage() {
-    if (trustUrl) return trustUrl;
-    var M = TRUST.mask, k = 4, c = document.createElement('canvas'), ctx = c.getContext && c.getContext('2d');
-    if (!ctx) return null;
-    c.width = M.width * k; c.height = M.height * k;
-    var img = ctx.createImageData(c.width, c.height), d = img.data, m = trustMask(), x, y, o, cls, line;
-    for (y = 0; y < c.height; y++) for (x = 0; x < c.width; x++) {
-      cls = m[Math.floor(y / k) * M.width + Math.floor(x / k)]; o = 4 * (y * c.width + x);
-      if (cls === 2) { line = (x + y) % 8 < 2; d[o] = d[o + 1] = d[o + 2] = line ? 40 : 226; d[o + 3] = line ? 210 : 205; }      // pale veil with dark hatching
-      else if (cls === 3 || cls === 4) { d[o] = d[o + 1] = d[o + 2] = 150; d[o + 3] = 150; }
+  // The confirmed map: only cells that were checked (towns and open land) keep a value. Edges of the data and hills that could not be
+  // checked are simply not drawn, so nothing lies on the imagery outside the valley.
+  var confLayer = null, hatchLayer = null, hatchUrl = null, DivOverlay = null;
+  function confirmedUrl(s, i) {
+    var key = s.id + ':c:' + i;
+    if (overlayCache[key]) return overlayCache[key];
+    var c = document.createElement('canvas'), ctx = c.getContext && c.getContext('2d'), g = s.grid, f = gridFrames(s)[i], m = trustMask(), vmax = s.overlay.vmax_cm, n = s.noise.value_cm;
+    if (!ctx) return s.overlay.files[i];
+    c.width = g.width; c.height = g.height;
+    var img = ctx.createImageData(g.width, g.height), d = img.data;
+    for (var k = 0; k < f.length; k++) {
+      if (f[k] === g.nodata || m[k] !== 1) continue;
+      var v = f[k] * g.step_cm, col = ramp(Math.max(-1, Math.min(1, v / vmax)));
+      d[4 * k] = col[0]; d[4 * k + 1] = col[1]; d[4 * k + 2] = col[2]; d[4 * k + 3] = 255 * tintAlpha(v, n, vmax);
     }
     ctx.putImageData(img, 0, 0);
-    try { trustUrl = c.toDataURL('image/png'); } catch (e) { trustUrl = null; }
-    return trustUrl;
+    try { overlayCache[key] = c.toDataURL('image/png'); } catch (e) { return s.overlay.files[i]; }
+    return overlayCache[key];
   }
-  // fade = true makes the change slow and visible (the "now look at the fields" moment): the shading is taken off, then fades in.
+  // Filtered-out farmland: a calm slate with fine diagonal lines. The pattern is drawn in screen pixels and only masked by the
+  // farmland cells, so the lines keep the same fine pitch at every zoom level.
+  function hatchElement() {
+    if (!hatchUrl) {
+      var M = TRUST.mask, c = document.createElement('canvas'), ctx = c.getContext && c.getContext('2d'), m = trustMask();
+      if (!ctx) return null;
+      c.width = M.width; c.height = M.height;
+      var img = ctx.createImageData(M.width, M.height), d = img.data;
+      for (var k = 0; k < m.length; k++) if (m[k] === 2) { d[4 * k] = d[4 * k + 1] = d[4 * k + 2] = 255; d[4 * k + 3] = 255; }
+      ctx.putImageData(img, 0, 0);
+      try { hatchUrl = c.toDataURL('image/png'); } catch (e) { return null; }
+    }
+    var el = document.createElement('div');
+    el.style.webkitMaskImage = 'url(' + hatchUrl + ')'; el.style.maskImage = 'url(' + hatchUrl + ')';
+    return el;
+  }
+  function trustEls() { return [confLayer, hatchLayer].map(function (l) { return l && l.getElement ? l.getElement() : null; }).filter(function (e) { return e && e.classList; }); }
+  // The quick map is wiped away (west to east) while the confirmed map is on, except left of the swipe divider.
+  function applyVis() {
+    var el = overlay && overlay.getElement ? overlay.getElement() : null;
+    if (!el || !el.classList) return;
+    if (confLayer && state.shade && !state.compare && state.site && state.site.id === 'sjv') el.classList.add('gone'); else el.classList.remove('gone');
+  }
+  // The farmland filter. fade: true = the tour's reveal (a beat, then the filter sweeps across); 'now' = sweep at once.
   function setShade(on, fade) {
-    var s = state.site, box = $('shadeBox'), can = !!(s && s.id === 'sjv' && TRUST);
+    var s = state.site, can = !!(s && s.id === 'sjv' && TRUST);
     clearTimeout(shadeTimer);
-    box.hidden = !can;
+    $('shadeBox').hidden = !can; $('compareBox').hidden = !can;
     if (can) { state.shade = !!on; $('shadeToggle').checked = state.shade; }
-    if (map && trustLayer) { map.removeLayer(trustLayer); trustLayer = null; }
+    if ((!can || !state.shade) && state.compare) setCompare(false, true);
     if (s) legend(s);
     if (view3d && view3dSite === 'sjv') { view3dSite = null; if (state.view === '3d' && can) load3d(); }   // the 3D surface greys farmland too
-    if (!can || !state.shade || !map) return;
-    var url = trustImage(); if (!url) return;
-    trustLayer = L.imageOverlay(url, TRUST.mask.bounds, { opacity: fade ? 0 : 1, className: 'trust', pane: 'trust', interactive: false }).addTo(map);
-    if (fade) { var lay = trustLayer; shadeTimer = setTimeout(function () { if (trustLayer === lay) lay.setOpacity(1); }, 900); }
+    syncHash();
+    if (!map) return;
+    if (!can || !state.shade) {
+      var old = [confLayer, hatchLayer].filter(Boolean);
+      confLayer = hatchLayer = null;
+      trustElsOf(old).forEach(function (e) { e.classList.add('pre'); });
+      setTimeout(function () { old.forEach(function (l) { map.removeLayer(l); }); }, can ? 620 : 0);
+      applyVis();
+      return;
+    }
+    if (confLayer && fade !== true) { applyVis(); return; }      // already on
+    [confLayer, hatchLayer].forEach(function (l) { if (l) map.removeLayer(l); });
+    confLayer = hatchLayer = null;
+    if (!DivOverlay) DivOverlay = L.ImageOverlay.extend({ _initImage: function () {
+      var el = this._image = this._url;
+      L.DomUtil.addClass(el, 'leaflet-image-layer');
+      if (this._zoomAnimated) L.DomUtil.addClass(el, 'leaflet-zoom-animated');
+      if (this.options.className) L.DomUtil.addClass(el, this.options.className);
+    } });
+    var pre = fade ? ' pre' : '', hel = hatchElement();
+    confLayer = L.imageOverlay(confirmedUrl(s, state.i), TRUST.mask.bounds, { opacity: 1, className: 'disp smooth trust' + pre, pane: 'trust', interactive: false }).addTo(map);
+    if (hel) hatchLayer = new DivOverlay(hel, TRUST.mask.bounds, { opacity: 1, className: 'trust hatch' + pre, pane: 'trust', interactive: false }).addTo(map);
+    if (fade) shadeTimer = setTimeout(function () { trustEls().forEach(function (e) { e.classList.remove('pre'); }); applyVis(); }, fade === true ? 700 : 40);
+    else applyVis();
   }
+  function trustElsOf(ls) { return ls.map(function (l) { return l.getElement ? l.getElement() : null; }).filter(function (e) { return e && e.classList; }); }
 
   // ---------- time
   function setDate(i) {
@@ -602,16 +631,18 @@
     $('dateSlider').value = i;
     $('dateLabel').textContent = fmtDate(s.dates[i]);
     $('dateSub').textContent = i === 0 ? 'start of the record' : days(s.dates[0], s.dates[i]) + ' days in';
+    timelineAt(i); syncHash();
     if (overlay) overlay.setUrl(overlayUrl(s, i));
+    if (confLayer) confLayer.setUrl(confirmedUrl(s, i));
     if (view3d && state.view === '3d' && view3dSite === s.id) view3d.setDate(i, true);   // the surface eases to the new date
     var fb = $('fallbackImg'); if (fb) fb.src = s.overlay.files[i];
     if (state.sel) renderDetail();
   }
-  function stop() { clearInterval(state.timer); state.timer = null; $('playBtn').innerHTML = '&#9654;'; $('playBtn').setAttribute('aria-label', 'Play the time series'); }
+  function stop() { clearInterval(state.timer); state.timer = null; $('playBtn').classList.remove('playing'); $('playBtn').setAttribute('aria-label', 'Play the time series'); }
   function play() {
     var n = state.site.dates.length;
     if (state.i >= n - 1) setDate(0);
-    $('playBtn').innerHTML = '&#10073;&#10073;'; $('playBtn').setAttribute('aria-label', 'Pause');
+    $('playBtn').classList.add('playing'); $('playBtn').setAttribute('aria-label', 'Pause');
     state.timer = setInterval(function () { if (state.i >= n - 1) stop(); else setDate(state.i + 1); }, 650);
   }
 
@@ -650,21 +681,24 @@
       if (!s.band) return;
       var up = [], down = [];
       xs.forEach(function (x, i) { if (s.band.lo[i] != null && s.band.hi[i] != null) { up.push(X(x).toFixed(1) + ' ' + Y(s.band.hi[i]).toFixed(1)); down.unshift(X(x).toFixed(1) + ' ' + Y(s.band.lo[i]).toFixed(1)); } });
-      if (up.length) g += '<path d="M' + up.concat(down).join('L') + 'Z" style="fill:var(--band)"/>';
+      if (up.length) g += '<path class="bandp" d="M' + up.concat(down).join('L') + 'Z" style="fill:var(--band)"/>';
     });
     cfg.series.forEach(function (s) {
-      g += '<path d="' + path(s.ys) + '" fill="none" style="stroke:' + s.color + '" stroke-width="' + (s.width || 2) + '" stroke-linejoin="round"' + (s.dash ? ' stroke-dasharray="' + s.dash + '"' : '') + '/>';
+      g += '<path ' + (s.dash ? '' : 'class="draw" pathLength="1" ') + 'd="' + path(s.ys) + '" fill="none" style="stroke:' + s.color + '" stroke-width="' + (s.width || 2) + '" stroke-linejoin="round"' + (s.dash ? ' stroke-dasharray="' + s.dash + '"' : '') + '/>';
       if (s.dots) s.ys.forEach(function (v, i) { if (v != null) g += '<circle cx="' + X(xs[i]).toFixed(1) + '" cy="' + Y(v).toFixed(1) + '" r="2.6" style="fill:' + s.color + ';stroke:var(--surface)" stroke-width="1"/>'; });
     });
     if (cfg.cursor != null) g += '<line class="cursor" x1="' + X(cfg.cursor) + '" x2="' + X(cfg.cursor) + '" y1="' + m.t + '" y2="' + (H - m.b) + '"/>';
     g += '<line class="hover" x1="0" x2="0" y1="' + m.t + '" y2="' + (H - m.b) + '" visibility="hidden"/>';
     host.innerHTML = '<svg viewBox="0 0 ' + W + ' ' + H + '" width="' + W + '" height="' + H + '" role="img" aria-label="' + esc(cfg.label) + '">' + g +
       '<rect class="hit" x="' + m.l + '" y="' + m.t + '" width="' + (W - m.l - m.r) + '" height="' + (H - m.t - m.b) + '" fill="transparent"/></svg><div class="tip" hidden></div>';
+    var ckey = (state.site ? state.site.id : '') + '|' + cfg.label + '|' + cfg.series.length;
+    if (host.classList) { if (ckey !== lastChartKey) host.classList.add('new'); else host.classList.remove('new'); }
+    lastChartKey = ckey;
     var svg = host.querySelector('svg'), tip = host.querySelector('.tip'), hl = host.querySelector('.hover');
     function move(ev) {
       var box = svg.getBoundingClientRect(), px = (ev.clientX - box.left) * (W / box.width), best = 0, bd = Infinity;
       xs.forEach(function (x, i) { var d = Math.abs(X(x) - px); if (d < bd) { bd = d; best = i; } });
-      hl.setAttribute('x1', X(xs[best])); hl.setAttribute('x2', X(xs[best])); hl.setAttribute('visibility', 'visible');
+      hl.style.transform = 'translateX(' + X(xs[best]).toFixed(1) + 'px)'; hl.setAttribute('visibility', 'visible');
       tip.innerHTML = '<b>' + esc(cfg.xFmt(xs[best], best)) + '</b>' + cfg.series.map(function (s) {
         return '<div><i style="background:' + s.color + '"></i>' + esc(s.short || s.name) + '<span>' + cm(s.ys[best]) + ' cm</span></div>';
       }).join('');
@@ -699,7 +733,7 @@
 
   // ---------- detail panel
   function select(sel) { state.sel = sel; var p = $('picker'); p.value = sel ? sel.type + ':' + (sel.name || sel.id || '') : ''; if (p.selectedIndex < 0) p.selectedIndex = 0; highlight(); renderDetail();
-    if (sel) { showBox('detail'); if (sel.type !== 'gps') { ui.step = null; markSteps(); } }
+    if (sel) { showBox('detail'); ui.step = sel.type === 'gps' && tourStation(state.site) && tourStation(state.site).id === sel.id ? 'gps' : null; markSteps(); setPanel(true); syncHash(); }
     else if (ui.box === 'detail') { showBox('step'); $('placeTitle').innerHTML = ui.head || ''; $('stepNotes').innerHTML = ui.notes || ''; }
   }
 
@@ -716,6 +750,8 @@
   function seriesPanel(s, o) {
     var ax = dateAxis(s), box = $('detail');
     setHeading(esc(o.title), true);
+    var isNew = ui.freshKey !== o.title; ui.freshKey = o.title;
+    if (box.classList) { if (/^GPS station/.test(o.title)) box.classList.add('gps'); else box.classList.remove('gps'); }
     box.innerHTML = (o.kpis ? '<div class="kpis">' + o.kpis.map(function (k) { return kpi(esc(k[0]), esc(k[1])); }).join('') + '</div>' : '') +
       (o.line ? '<p class="plain">' + esc(o.line) + '</p>' : '') +
       chartLegend(o.series, o.noise ? '<span><i class="bandkey"></i>noise ±' + o.noise.toFixed(1) + ' cm</span>' : '') + '<div class="chart"></div>';
@@ -725,6 +761,7 @@
         return [fmtDate(d)].concat(o.series.map(function (x) { return cm(x.ys[i], 2); }));
       })), true);
     chart(box.querySelector('.chart'), { height: chartH() - (o.line ? 34 : 0), xs: ax.xs, xTicks: ax.ticks, xFmt: ax.fmt, series: o.series, yLabel: 'cm moved, ' + plainQ(s), cursor: ax.xs[state.i], noise: o.noise, label: o.title });
+    if (isNew) fresh(box);
   }
   // The single line a GPS view may carry outside the tour (the tour caption carries it on the San Joaquin town step).
   function gpsLine(s, g) {
@@ -773,7 +810,7 @@
     var G = window.Groundline3D, box = $('viewToggle');
     if (!G || !G.supported()) return;                          // no WebGL or no three.js: the toggle stays hidden
     has3d = true;
-    [['2d', '2D map'], ['3d', 'See it in 3D']].forEach(function (v) {
+    [['2d', 'Map'], ['3d', '3D']].forEach(function (v) {
       var b = h('button', { type: 'button', 'data-view': v[0], 'aria-pressed': v[0] === '2d' ? 'true' : 'false' }, v[1]);
       b.addEventListener('click', function () { setView(v[0]); });
       box.appendChild(b);
@@ -802,8 +839,9 @@
       catch (e) { $('viewToggle').hidden = true; v = '2d'; }   // WebGL refused after all: stay in 2D
     }
     state.view = v;
-    $('map').hidden = v === '3d'; $('map3d').hidden = v !== '3d'; $('controls3d').hidden = v !== '3d'; $('layerRow').hidden = v === '3d'; $('mode3d').hidden = v !== '3d';
-    $('mapWrap').setAttribute('data-view', v); markSteps();
+    $('controls3d').hidden = v !== '3d'; $('layerRow').hidden = v === '3d'; $('mode3d').hidden = v !== '3d';
+    $('mapWrap').setAttribute('data-view', v); markSteps(); syncHash();
+    if (v === '3d' && state.compare) setCompare(false, true);
     Array.prototype.forEach.call($('viewToggle').children, function (b) { b.setAttribute('aria-pressed', b.getAttribute('data-view') === v ? 'true' : 'false'); });
     if (v === '3d') load3d();
     else if (map) setTimeout(function () { map.invalidateSize(); }, 30);
@@ -829,8 +867,8 @@
     var s = state.site;
     if (view3dSite !== s.id) {
       view3d.setSite({ grid: s.grid, frames: gridFrames(s), bounds: s.overlay.bounds, vmax: s.overlay.vmax_cm, noise: s.noise.value_cm,
-        alignments: s.alignments, gps: s.gps, places: s.places, upliftConfirmed: upliftConfirmed(s), dim: s.id === 'sjv' && TRUST && state.shade ? trustMask() : null,
-        imagery: { url: TILES.sat, credit: SAT_CREDIT }, elevation: DEM });
+        alignments: [], gps: state.showGps ? s.gps : [], places: s.places, upliftConfirmed: upliftConfirmed(s), dim: s.id === 'sjv' && TRUST && state.shade ? trustMask() : null,
+        imagery: { url: (window.BASE_TEXTURE && window.BASE_TEXTURE[s.id]) || TILES.sat, credit: SAT_CREDIT }, elevation: DEM });
       view3d.onImagery(caption3d);                                   // the caption mentions the imagery once it is there
       view3dSite = s.id;
     }
@@ -930,7 +968,7 @@
         else if (tc === 3 || tc === 4) flagP = 'Edge of the data or hills: not checked.';
       }
       seriesPanel(s, { kicker: kick, title: title, noise: noise, note: note, line: flagP,
-        kpis: [[cm(last(ys)) + pm(sig) + ' cm', 'by ' + fmtDate(s.dates[s.dates.length - 1]) + (sig != null ? ' (± one standard deviation)' : '')], [cm(ys[state.i]) + ' cm', 'on ' + fmtDate(s.dates[state.i])]],
+        kpis: [[cm(last(ys)) + pm(sig) + ' cm', 'by ' + fmtDate(s.dates[s.dates.length - 1]) + (sig != null ? ' (± one standard deviation)' : '')], [cm(ys[state.i]) + ' cm', 'on ' + fmtDate(s.dates[state.i])]].slice(0, state.i === s.dates.length - 1 ? 1 : 2),
         series: [{ name: 'Radar (NISAR)', short: 'Radar', ys: ys, color: 'var(--radar)', width: 3, dots: true }] });
     } else if (sel.type === 'alignment') {
       var al = s.alignments.filter(function (x) { return x.name === sel.name; })[0], rows = s.reaches.filter(function (r) { return r.alignment === al.name; });
@@ -1061,7 +1099,7 @@
     if (s.id === 'sjv' && TRUST) {
       var T = TRUST.people, rg = T.range_if_threshold_moved_by_1cm;
       setHeading('What we can confirm');
-      box.innerHTML = bignum('<small>at least</small> ' + T.ge_5cm_floor.toLocaleString('en-US'), 'people on ground that sank 5&nbsp;cm or more', 'huge');
+      box.innerHTML = bignum('<small>at least</small>' + num(T.ge_5cm_floor, 'int'), 'people on ground that sank 5&nbsp;cm or more', 'huge');
       setNotes('<p class="note">Mainly ' + T.mostly.slice(0, 3).map(function (m) { return esc(m[0]); }).join(', ').replace(/, ([^,]*)$/, ' and $1') + '. Towns and open land only. ' +
         'It is a floor: farmland is shaded and not counted, and nearly 4 in 10 residents live on ground we do not count.</p>' +
         '<p class="note">' + T.mostly.map(function (m) { return esc(m[0]) + ' ' + m[1].toLocaleString('en-US'); }).join(', ') + '. Period: ' + esc(T.window) +
@@ -1153,7 +1191,7 @@
     if (!box) return;
     if (g) g.gps_cm.forEach(function (v, i) { if (v != null && g.radar_cm[i] != null) gap = Math.max(gap, Math.abs(v - g.radar_cm[i])); });
     var wc = worldCounts();
-    box.innerHTML = bignum(String(wc.checked + wc.measured), 'places mapped so far', 'huge');
+    box.innerHTML = bignum(num(wc.checked + wc.measured, 'n'), 'places mapped so far', 'huge');
     $('worldNotes').innerHTML = '<p class="note">' + wc.checked + ' of the ' + (wc.checked + wc.measured) + ' mapped places are checked against GPS; ' + wc.measured + ' are measured and not yet checked.</p>' +
       (W.ids.length ? '<p class="note">About ' + fmtPeople(Math.round(W.total / 1e5) * 1e5) + ' people live on ground that sank 5 cm or more in the ' + W.ids.length + ' GPS-checked places: ' + esc(W.parts.join(' + ')) + '. Places not yet checked are left out of this number.</p>' : '') +
       (g ? '<p class="note"><b>It runs anywhere the radar looks.</b> Best-checked example: in Mexico City the map stays within ' + (gap <= 1.2 ? 'a centimetre' : gap.toFixed(1) + ' cm') + ' of GPS all year.</p>' : '') +
@@ -1290,20 +1328,22 @@
       (L.url ? '<p><a href="' + esc(L.url) + '" rel="noopener" target="_blank">Read the study</a></p>' : '') + '</div>';
   }
   // A clicked dot: one status label, one number or one line; the rest sits behind "More about this place".
+  function published(e) { return e.literature && e.literature.rate_cm_yr != null ? '<p class="plain">Published research reports about <b>' + e.literature.rate_cm_yr + ' cm per year</b>. That is not our measurement.</p>' : ''; }
   function worldCard(e) {
     var k = group3(e), st = STATUS[e.status] || STATUS.not_processed, sj = e.id === 'sjv' && TRUST, more = '';
     $('worldTitle').textContent = e.name + (e.country && e.name.indexOf(e.country) < 0 ? ', ' + e.country : '');
     var html = '<div class="kicker"><span class="dot3 ' + k + '"></span>' + esc(G3[k].label) + '</div>';
     if (e.status === 'refused') {
-      html += '<p class="plain">We tried here, and do not trust the result.</p>';
+      html += '<p class="plain"><b>Not mapped yet.</b> We tried here, and do not trust the result.</p>' + published(e);
       more += '<p class="note">' + esc(e.reason || '') + ' ' + (e.refused_by === 'manual_review' ? 'Decided by the team on reviewing the result by hand, not by an automatic test.' : 'Rejected by the pipeline\'s automatic quality check.') +
         (e.pipeline && e.pipeline.pairs ? ' We processed ' + e.pipeline.pairs + ' radar image pairs, ' + monthSpan(e.dates) + '.' : '') + '</p>';
     } else if (e.status === 'unconfirmed') {
-      html += '<p class="plain">We tried here, and could not confirm it.</p>';
+      html += '<p class="plain"><b>Not mapped yet.</b> We tried here, and could not confirm it.</p>' + published(e);
       more += '<p class="note">' + esc(e.unconfirmed_reason || st.text) + ' The radar result passed the automatic quality check' +
         (e.pipeline && e.pipeline.pairs ? ' (' + e.pipeline.pairs + ' image pairs, ' + monthSpan(e.dates) + ')' : '') + ', but did not match published studies, so no number is reported and it is left out of every total.</p>';
     } else if (k === 'none') {
-      html += '<p class="plain">' + (e.first_batch_rank ? 'Next in line to be measured.' : 'Known from published research only.') + '</p>';
+      html += '<p class="plain"><b>Not mapped yet.</b> ' + (e.first_batch_rank ? 'Next in line to be measured.' : 'Known from published research only.') + '</p>' +
+        published(e);
       more += '<p class="note">' + esc(st.text) + (e.first_batch_rank ? ' Number ' + e.first_batch_rank + ' in our first batch.' : '') + '</p>';
     } else if (sj) {
       html += '<p class="plain"><b>At least ' + TRUST.people.ge_5cm_floor.toLocaleString('en-US') + ' people</b> on ground that sank 5 cm or more.</p>';
@@ -1316,11 +1356,15 @@
     if (cov) more += '<p class="note">' + esc(coverLabel(cov)) + ': a free ground-motion service already maps this area. <a href="' + esc(cov.url) + '" rel="noopener" target="_blank">' + esc(cov.name) + '</a></p>';
     more += literatureHtml(e);
     if (e.has_site_data && DATA[e.id]) html += '<p><button class="cta open-site" type="button">Open ' + esc(shortName(e.id)) + ' →</button></p>';
+    html += '<p><button class="cta quiet all-places" type="button">All places</button></p>';
     if (more) html += '<details class="about"><summary>More about this place</summary>' + more + '</details>';
+    $('worldImpact').hidden = true;
     var box = $('worldCard');
     box.innerHTML = html;
     var b = box.querySelector && box.querySelector('.open-site');
     if (b && b.addEventListener) b.addEventListener('click', function () { flyToSite(e.id); });
+    var ap = box.querySelector && box.querySelector('.all-places');
+    if (ap && ap.addEventListener) ap.addEventListener('click', function () { goWorld(null); });
   }
   // The world panel before anything is clicked: the headline number and Mexico City, the best-checked example.
   function worldButtons(close) {
@@ -1331,7 +1375,7 @@
     if (b && b.addEventListener) b.addEventListener('click', function () { flyToSite('mexico_city'); });
     if (a && a.addEventListener) a.addEventListener('click', function () { tourGo(0); });
   }
-  function worldIntro() { $('worldTitle').textContent = 'It runs anywhere'; worldButtons(false); }
+  function worldIntro() { $('worldTitle').textContent = 'It runs anywhere'; $('worldImpact').hidden = false; worldButtons(false); countUps($('worldImpact')); }
   function closeCard() { $('worldTitle').textContent = 'One thing to remember'; worldButtons(true); }
   function worldCounts() {
     var c = { checked: 0, measured: 0, none: 0 };
@@ -1379,13 +1423,14 @@
   function openObs(e) {
     if (!e) return;
     if (e.has_site_data && DATA[e.id]) flyToSite(e.id);
-    else { worldCard(e); var wm = $('worldMore'); if (wm) wm.open = false; if (world) world.panTo([e.lat, e.lon]); }
+    else { ui.worldSel = e.id; syncHash(); worldCard(e); fresh($('worldCard')); var wm = $('worldMore'); if (wm) wm.open = false; if (world) world.panTo([e.lat, e.lon]); }
   }
   function initWorld() {
     if (!OBS.length) return;
     worldImpact(); worldLegend(); worldList(); worldIntro();
     if (!window.L) return;
-    world = L.map('worldMap', { zoomSnap: 0.25, scrollWheelZoom: false, worldCopyJump: true, minZoom: 1.5, keyboard: false });
+    world = L.map('worldMap', { zoomSnap: 0.25, zoomControl: false, worldCopyJump: true, minZoom: 1.5, keyboard: false });
+    underlay(world);
     world.setView([20, 10], 2);                    // polygons need a view before they are added; showWorld() fits it properly
     window.GroundlineWorld = world;                // for debugging and the browser tests
     L.tileLayer(TILES.sat, { maxZoom: 18, attribution: SAT_CREDIT, zIndex: 1 }).addTo(world);
@@ -1435,8 +1480,6 @@
       if (k === 'checked') L.marker([e.lat, e.lon], { interactive: false, keyboard: false, icon: L.divIcon({ className: 'obs-label', html: '<span>' + esc(shortName(e.id)) + '</span>', iconSize: null }) }).addTo(world);
       worldMarkers[e.id] = m;
     });
-    world.on('focus', function () { world.scrollWheelZoom.enable(); });
-    world.on('blur', function () { world.scrollWheelZoom.disable(); });
   }
   // The global likelihood tiles: only tiles listed in window.GLOBAL_LAYER_TILES are requested (empty tiles are not
   // written, and requesting them would log 404s). Without the listing every tile is requested and errors are ignored.
@@ -1463,15 +1506,15 @@
     if (world) {
       setTimeout(function () {
         world.invalidateSize();
-        world.fitBounds(OBS.filter(function (e) { return group3(e) !== 'none'; }).map(function (e) { return [e.lat, e.lon]; }), { padding: [40, 40], maxZoom: 3 });
+        world.fitBounds(OBS.filter(function (e) { return group3(e) !== 'none'; }).map(function (e) { return [e.lat, e.lon]; }), merge(pad(), { maxZoom: 3 }));
       }, 30);
     }
     markActs();
-    try { history.replaceState(null, '', '#world'); } catch (e) { /* file:// in some browsers */ }
+    ui.worldSel = null; syncHash();
   }
   function inWorld() { return document.documentElement.getAttribute('data-mode') === 'world'; }
   function enterSite(id) {
-    document.documentElement.setAttribute('data-mode', 'site');
+    document.documentElement.setAttribute('data-mode', 'site'); mapShown = null;
     selectSite(id);
     renderTour();
   }
@@ -1522,17 +1565,17 @@
     var s = DATA.sjv, T = TRUST, c = worldCounts();
     if (s && T) {
       TOUR.push({ site: 'sjv', step: 'intro', cap: 'In California\'s Central Valley, pumping groundwater makes the ground sink.' });
-      TOUR.push({ site: 'sjv', step: 'play', cap: 'One year of NASA radar over the valley. Red is sinking.' });
+      TOUR.push({ site: 'sjv', step: 'play', cap: 'One year of NASA radar over the valley. Warm colours are sinking.' });
       if (tourStation(s)) TOUR.push({ site: 'sjv', step: 'gps', cap: 'In the towns, it lands within a centimetre or two of GPS.' });
-      TOUR.push({ site: 'sjv', step: 'crops', cap: 'Real sinking doesn\'t stop at the city limits. The crops are fooling the radar.' });
+      TOUR.push({ site: 'sjv', step: 'crops', cap: 'On farmland a quick map reads too deep. Soil and leaves change with the seasons.' });
       TOUR.push({ site: 'sjv', step: 'people', cap: 'What we can confirm: towns and open land.' });
     } else {
       var first = DATA[ORDER[0]];
-      TOUR.push({ site: first.id, step: 'play', cap: 'NASA radar over ' + shortName(first.id) + '. Red is sinking.' });
+      TOUR.push({ site: first.id, step: 'play', cap: 'NASA radar over ' + shortName(first.id) + '. Warm colours are sinking.' });
       if (tourStation(first)) TOUR.push({ site: first.id, step: 'gps', cap: 'A GPS station on the ground checks the radar.' });
     }
     if (OBS.length) {
-      TOUR.push({ world: true, step: 'world', cap: 'NASA\'s newest radar, as a sinking map anyone can open, that only counts what it can confirm.' });
+      TOUR.push({ world: true, step: 'world', cap: 'See the ground sinking before something breaks.' });
     }
   }
   function tourIndex(siteId, step) {
@@ -1555,10 +1598,10 @@
       if (state.view === '3d') setView('2d');
       if (t.step !== 'play') { stop(); setDate(state.site.dates.length - 1); }
       runStep(t.step);
-      try { history.replaceState(null, '', i === 0 ? '#start' : '#' + t.site); } catch (e) { /* file:// in some browsers */ }
     }
     renderTour();
-    var p = $('panel'); if (p) p.scrollTop = 0;
+    var p = $('panelScroll'); if (p) p.scrollTop = 0;
+    var cp = $('tourCaption'); if (cp.classList && window.requestAnimationFrame) { cp.classList.remove('swap'); void cp.offsetWidth; cp.classList.add('swap'); }
   }
   function renderTour() {
     if (!TOUR.length) return;
@@ -1567,12 +1610,12 @@
     $('tourDots').innerHTML = TOUR.map(function (x, k) { return '<i' + (k === tour.i ? ' class="on"' : '') + '></i>'; }).join('');
     $('tourCaption').textContent = here ? t.cap : 'You left the tour. Press Next to pick it up again.';
     $('tourBack').disabled = tour.i === 0;
-    $('tourNext').innerHTML = tour.i === TOUR.length - 1 ? '<span>Start again</span> ↺' : '<span>Next</span> →';
+    $('tourNext').textContent = tour.i === TOUR.length - 1 ? 'Finish' : 'Next';
     tour.here = here;
   }
   function tourStep(d) {
     if (!tour.here) { tourGo(tour.i + (d > 0 && tour.left ? 1 : 0)); return; }      // off the path: come back to the same step
-    if (d > 0 && tour.i === TOUR.length - 1) tourGo(0); else tourGo(tour.i + d);
+    if (d > 0 && tour.i === TOUR.length - 1) exitTour(); else tourGo(tour.i + d);
   }
   function initTour() {
     buildTour();
@@ -1580,13 +1623,390 @@
     $('tourNext').addEventListener('click', function () { tourStep(1); });
     // Arrow keys and presenter clickers (Page Up / Page Down) drive the tour from anywhere on the page.
     document.addEventListener('keydown', function (e) {
-      if (!e || e.altKey || e.ctrlKey || e.metaKey) return;
+      if (!e || e.altKey || e.ctrlKey || e.metaKey || !tour.active) return;
+      if (e.key === 'Escape') { exitTour(); return; }
       var k = e.key, fwd = k === 'ArrowRight' || k === 'PageDown', back = k === 'ArrowLeft' || k === 'PageUp', tag = e.target && e.target.tagName;
       if (!fwd && !back) return;
       if ((tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') && (k === 'ArrowRight' || k === 'ArrowLeft')) return;
       e.preventDefault(); e.stopPropagation();
       tourStep(fwd ? 1 : -1);
     }, true);
+  }
+
+  // ---------- app shell: motion helpers, panel, menus, toast, search, layers, swipe, timeline, share, export, about
+  var root = document.documentElement, restoring = false, hashTimer = null, lastChartKey = null, freshTimer = null, mapShown = null;
+  function reducedMotion() { return !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches); }
+  function merge(a, b) { var o = {}; Object.keys(a).forEach(function (k) { o[k] = a[k]; }); Object.keys(b).forEach(function (k) { o[k] = b[k]; }); return o; }
+  // Room the floating chrome takes, so a place is framed in the part of the map that is actually visible.
+  function pad() {
+    var w = window.innerWidth || 1280, hh = window.innerHeight || 720, phone = w < 760, pw = ($('panel').offsetWidth || 400) + 24;
+    return { paddingTopLeft: [phone ? 10 : 64, phone ? 64 : 80], paddingBottomRight: [!phone && ui.panelOpen ? pw : 12, phone ? (ui.panelOpen ? Math.round(hh * 0.52) + 70 : 170) : 92] };
+  }
+  // A view that has just changed staggers in; a view that is only being refreshed (playback) does not.
+  function fresh(el) {
+    if (!el || !el.classList || !window.requestAnimationFrame) return;
+    el.classList.remove('fresh'); void el.offsetWidth; el.classList.add('fresh');
+    clearTimeout(freshTimer); freshTimer = setTimeout(function () { el.classList.remove('fresh'); }, 520);
+  }
+  function fmtNum(v, f) { return f === 'int' ? Math.round(v).toLocaleString('en-US') : f === 'fix1' ? (+v).toFixed(1) : String(Math.round(v)); }
+  function num(v, f) { return '<span data-count="' + v + '" data-fmt="' + f + '">' + fmtNum(v, f) + '</span>'; }
+  // Key figures count to their value when they change.
+  function countUps(box) {
+    if (!box || !box.querySelectorAll || !window.requestAnimationFrame || reducedMotion()) return;
+    Array.prototype.forEach.call(box.querySelectorAll('[data-count]'), function (el) {
+      var to = +el.getAttribute('data-count'), f = el.getAttribute('data-fmt'), t0 = Date.now();
+      (function frame() {                                        // wall-clock time: independent of the animation clock
+        var t = Math.max(0, Math.min(1, (Date.now() - t0) / 520)), e = 1 - Math.pow(1 - t, 3);
+        el.textContent = fmtNum(to * e, f);
+        if (t < 1) window.requestAnimationFrame(frame);
+      })();
+    });
+  }
+  var toastTimer = null;
+  function toast(msg) {
+    var t = $('toast'); t.textContent = msg; t.classList.add('on');
+    clearTimeout(toastTimer); toastTimer = setTimeout(function () { t.classList.remove('on'); }, 2600);
+  }
+  function fail(msg) {
+    $('errorText').textContent = msg; $('errorState').hidden = false; $('boot').style.display = 'none';
+  }
+
+  // ----- panel (bottom sheet on phones)
+  function setPanel(open) {
+    ui.panelOpen = !!open;
+    setTimeout(function () { if (view3d && state.view === '3d') view3d.resize(); }, 520);
+    var app = $('top'); if (open) app.classList.remove('panel-closed'); else app.classList.add('panel-closed');
+    $('panelToggle').setAttribute('aria-expanded', open ? 'true' : 'false');
+  }
+
+  // ----- menus
+  var MENUS = [['layersBtn', 'layersMenu'], ['exportBtn', 'exportMenu']];
+  function closeMenus(except) {
+    MENUS.forEach(function (m) { if (m[1] !== except) { $(m[1]).classList.remove('open'); $(m[0]).setAttribute('aria-expanded', 'false'); } });
+    if (except !== 'searchResults') { $('searchResults').classList.remove('open'); $('search').setAttribute('aria-expanded', 'false'); }
+  }
+  function toggleMenu(btnId, menuId) {
+    var open = $(btnId).getAttribute('aria-expanded') === 'true';
+    closeMenus();
+    if (!open) { $(menuId).classList.add('open'); $(btnId).setAttribute('aria-expanded', 'true'); }
+  }
+
+  // ----- where to go
+  function goPlace(id) {
+    if (!DATA[id]) return;
+    closeMenus(); setPanel(true);
+    if (inWorld()) { flyToSite(id); return; }
+    root.setAttribute('data-mode', 'site');
+    selectSite(id);
+  }
+  function goWorld(entry) {
+    closeMenus(); setPanel(true);
+    showWorld();
+    if (entry) {
+      ui.worldSel = entry.id; worldCard(entry); fresh($('worldCard'));
+      if (world) setTimeout(function () { world.flyTo([entry.lat, entry.lon], 5, { duration: reducedMotion() ? 0.01 : 1.2 }); }, 60);
+    } else worldIntro();
+    syncHash();
+  }
+
+  // ----- search: is my place mapped?
+  var searchIdx = [], searchHits = [], searchAt = -1;
+  function buildSearch() {
+    var seen = {};
+    OBS.forEach(function (e) {
+      var s = DATA[e.id], alias = [e.name, e.country, continentOf(e)];
+      if (s) { alias.push(s.name); (CITY_LABELS[e.id] || []).forEach(function (c) { alias.push(c[0]); }); (s.places || []).forEach(function (p) { alias.push(p.name); }); }
+      if (e.id === 'sjv') alias.push('California', 'Central Valley', 'Friant-Kern Canal', 'Tulare County', 'Kern County', 'Fresno County');
+      seen[e.id] = 1;
+      searchIdx.push({ e: e, id: e.id, mapped: !!(e.has_site_data && s), k: group3(e), name: e.id === 'sjv' ? 'San Joaquin Valley' : e.name, sub: e.country || '', alias: alias.filter(Boolean) });
+    });
+    ORDER.forEach(function (id) { if (!seen[id]) searchIdx.push({ e: null, id: id, mapped: true, k: (DATA[id].gps || []).length ? 'checked' : 'measured', name: DATA[id].name, sub: '', alias: [DATA[id].name] }); });
+  }
+  function searchRun(q) {
+    q = q.trim().toLowerCase();
+    var rank = { checked: 0, measured: 1, none: 2 }, out = [];
+    if (!q) return searchIdx.filter(function (x) { return x.k === 'checked'; }).map(function (x) { return { x: x, s: 0, via: '' }; });
+    searchIdx.forEach(function (x) {
+      var best = 9, via = '';
+      x.alias.forEach(function (a, i) {
+        var t = a.toLowerCase(), s = t.indexOf(q) === 0 ? 0 : t.split(/[\s,()\-\/]+/).some(function (w) { return w.indexOf(q) === 0; }) ? 1 : q.length > 2 && t.indexOf(q) >= 0 ? 2 : 9;
+        if (i > 0) s += 0.5;                                       // a match on the place's own name comes first
+        if (s < best) { best = s; via = i > 0 && a !== x.name && a !== x.sub ? a : ''; }
+      });
+      if (best < 9) out.push({ x: x, s: best, via: via });
+    });
+    return out.sort(function (a, b) { return a.s - b.s || rank[a.x.k] - rank[b.x.k] || (a.x.name < b.x.name ? -1 : 1); }).slice(0, 8);
+  }
+  function searchRender() {
+    var box = $('searchResults'), q = $('search').value || '';
+    searchHits = searchRun(q); searchAt = searchHits.length && q.trim() ? 0 : -1;
+    var TAG = { checked: 'Mapped, checked', measured: 'Mapped, not yet checked', none: 'Not mapped yet' };
+    box.innerHTML = (q.trim() ? '' : '<h3>Start here</h3>') + (searchHits.length ? searchHits.map(function (h, i) {
+      var x = h.x, tag = x.k === 'measured' && !x.mapped ? 'Measured' : TAG[x.k];
+      return '<button type="button" class="res' + (i === searchAt ? ' active' : '') + '" role="option" data-i="' + i + '" style="--i:' + i + '"><span class="dot3 ' + x.k + '"></span><span><b>' + esc(x.name) + '</b><small>' +
+        esc(x.sub) + (h.via ? (x.sub ? ' · ' : '') + 'includes ' + esc(h.via) : '') + '</small></span><span class="tag ' + x.k + '">' + tag + '</span></button>';
+    }).join('') : '<p class="res-empty">No known sinking place matches “' + esc(q.trim()) + '”. Groundline lists places from published research, so yours may not be in the catalogue yet.</p>') +
+      (q.trim() ? '' : '<button type="button" class="res" role="option" data-world="1" style="--i:' + searchHits.length + '"><span class="dot3 none"></span><span><b>World map</b><small>Every place Groundline has looked at</small></span><span class="tag">' + (worldCounts().checked + worldCounts().measured) + ' mapped</span></button>');
+    box.classList.remove('open'); void box.offsetWidth; box.classList.add('open');
+    $('search').setAttribute('aria-expanded', 'true');
+    Array.prototype.forEach.call(box.querySelectorAll ? box.querySelectorAll('.res') : [], function (b) {
+      b.addEventListener('click', function () { if (b.getAttribute('data-world')) { searchClose(); goWorld(null); } else searchPick(+b.getAttribute('data-i')); });
+    });
+  }
+  function searchClose() { $('searchResults').classList.remove('open'); $('search').setAttribute('aria-expanded', 'false'); if ($('search').blur) $('search').blur(); }
+  function searchPick(i) {
+    var h = searchHits[i]; if (!h) return;
+    $('search').value = ''; searchClose();
+    if (h.x.mapped) goPlace(h.x.id); else goWorld(h.x.e);        // the result hands off to a map flight
+  }
+  function initSearch() {
+    buildSearch();
+    var inp = $('search');
+    inp.addEventListener('focus', function () { closeMenus('searchResults'); searchRender(); });
+    inp.addEventListener('input', searchRender);
+    inp.addEventListener('keydown', function (e) {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault(); if (!searchHits.length) return;
+        searchAt = (searchAt + (e.key === 'ArrowDown' ? 1 : -1) + searchHits.length) % searchHits.length;
+        Array.prototype.forEach.call($('searchResults').querySelectorAll('.res[data-i]'), function (b, k) { b.classList.toggle('active', k === searchAt); });
+      } else if (e.key === 'Enter') { e.preventDefault(); searchPick(searchAt < 0 ? 0 : searchAt); }
+      else if (e.key === 'Escape') searchClose();
+    });
+  }
+
+  // ----- layers
+  function syncLayerUi() {
+    $('gpsToggle').checked = state.showGps; $('linesToggle').checked = state.showLines;
+    Array.prototype.forEach.call(document.querySelectorAll('[data-base]'), function (x) { x.setAttribute('aria-pressed', x.getAttribute('data-base') === state.base ? 'true' : 'false'); });
+  }
+  function redrawVectors() { if (state.site && vectors) { drawVectors(state.site); highlight(); } syncHash(); }
+  // Swipe: the quick map on the left of the divider, the confirmed map (farmland filtered out) on the right.
+  function setCompare(on, quiet) {
+    var can = !!(state.site && state.site.id === 'sjv' && TRUST);
+    state.compare = !!on && can;
+    $('compareToggle').checked = state.compare; $('swipe').hidden = !state.compare;
+    if (state.compare && !state.shade) setShade(true);
+    updateSwipe();
+    if (!quiet) syncHash();
+  }
+  function updateSwipe() {
+    if (!map) return;
+    var pane = map.getPane('trust'), dpane = map.getPane('data'), w = $('mapWrap').clientWidth || 1;
+    applyVis();
+    if (!state.compare) { pane.style.clipPath = ''; dpane.style.clipPath = ''; return; }
+    var x = Math.round(state.swipe * w), pt = map.containerPointToLayerPoint([x, 0]), lx = typeof pt.x === 'number' ? pt.x : 0;
+    $('swipe').style.left = x + 'px';
+    pane.style.clipPath = 'polygon(' + lx + 'px -100000px, 100000px -100000px, 100000px 100000px, ' + lx + 'px 100000px)';
+    dpane.style.clipPath = 'polygon(-100000px -100000px, ' + lx + 'px -100000px, ' + lx + 'px 100000px, -100000px 100000px)';
+  }
+  function initSwipe() {
+    var grip = $('swipeGrip'), drag = false;
+    function at(e) { var r = $('mapWrap').getBoundingClientRect(); state.swipe = Math.max(0.04, Math.min(0.96, (e.clientX - r.left) / r.width)); updateSwipe(); }
+    grip.addEventListener('pointerdown', function (e) { drag = true; if (grip.setPointerCapture) grip.setPointerCapture(e.pointerId); e.preventDefault(); });
+    grip.addEventListener('pointermove', function (e) { if (drag) at(e); });
+    grip.addEventListener('pointerup', function () { drag = false; syncHash(); });
+    grip.addEventListener('keydown', function (e) {
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+      e.preventDefault(); e.stopPropagation();
+      state.swipe = Math.max(0.04, Math.min(0.96, state.swipe + (e.key === 'ArrowLeft' ? -0.03 : 0.03))); updateSwipe(); syncHash();
+    });
+    if (map) map.on('move zoom viewreset resize', updateSwipe);
+  }
+
+  // ----- timeline: progress, the "official map ends here" marker, and how far the radar goes beyond it
+  var tline = { m: 2, p: 1 };
+  function stateEnd(s) { var sp = s.state_product, d = sp && (sp.provisional_to || sp.final_to); return d ? String(d).replace(/-/g, '') : null; }
+  function timelineFor(s) {
+    var end = stateEnd(s), n = s.dates.length, tr = $('track'), m = 2;
+    if (end && end > s.dates[0] && end < s.dates[n - 1]) {
+      for (var k = 0; k < n - 1; k++) if (s.dates[k] <= end && end < s.dates[k + 1]) m = (k + days(s.dates[k], end) / days(s.dates[k], s.dates[k + 1])) / (n - 1);
+    }
+    tline.m = m; tline.p = 1;
+    tr.style.setProperty('--m', m); tr.style.setProperty('--w', (tr.clientWidth || 0) + 'px');
+    $('trackMark').hidden = m > 1; $('trackNote').hidden = m > 1;
+    if (m <= 1) {
+      var more = Math.round(days(end, s.dates[n - 1]) / 30.44);
+      $('trackNote').innerHTML = 'State\'s official map ends here<b>NISAR: ' + more + ' more month' + (more === 1 ? '' : 's') + '</b>';
+      $('trackMark').setAttribute('title', 'The State\'s official map ends on ' + fmtDate(end));
+    }
+  }
+  function timelineAt(i) {
+    var s = state.site, tr = $('track'), p = s.dates.length > 1 ? i / (s.dates.length - 1) : 1, mk = $('trackMark');
+    tr.style.setProperty('--p', p);
+    if (p > tline.m) tr.classList.add('passed'); else tr.classList.remove('passed');
+    if (tline.p <= tline.m && p > tline.m && tline.m <= 1) {           // the playhead has just passed the marker: pulse once
+      mk.classList.remove('pulse'); void mk.offsetWidth; mk.classList.add('pulse');
+    }
+    tline.p = p;
+  }
+
+  // ----- shareable state in the URL hash
+  function encodeState() {
+    if (inWorld()) return 'p=world' + (ui.worldSel ? '&q=' + encodeURIComponent(ui.worldSel) : '');
+    var s = state.site, a, sel = state.sel, en = encodeURIComponent;
+    if (!s) return '';
+    a = ['p=' + s.id];
+    if (state.i !== s.dates.length - 1) a.push('d=' + s.dates[state.i]);
+    if (state.view === '3d') a.push('v=3d');
+    if (s.id === 'sjv' && TRUST) { if (!state.shade) a.push('f=0'); if (state.compare) a.push('cmp=' + Math.round(state.swipe * 100)); }
+    if (!state.showGps) a.push('gps=0');
+    if (!state.showLines) a.push('lines=0');
+    if (state.base !== 'sat') a.push('b=plain');
+    if (sel) a.push(sel.type === 'gps' ? 'st=' + en(sel.id) : sel.type === 'point' ? 'pt=' + sel.lat.toFixed(4) + ',' + sel.lon.toFixed(4) : sel.type === 'alignment' ? 'ln=' + en(sel.name) : 'pl=' + en(sel.name));
+    else if (ui.step === 'crops' || ui.step === 'people') a.push('tab=' + ui.step);
+    return a.join('&');
+  }
+  function syncHash() {
+    if (restoring || tour.active) return;
+    clearTimeout(hashTimer);
+    hashTimer = setTimeout(function () { try { history.replaceState(null, '', '#' + encodeState()); } catch (e) { /* file:// in some browsers */ } }, 200);
+  }
+  function applyHash(h) {
+    var q = {};
+    String(h || '').replace(/^#/, '').split('&').forEach(function (kv) {
+      var i = kv.indexOf('=');
+      try { if (i > 0) q[kv.slice(0, i)] = decodeURIComponent(kv.slice(i + 1)); else if (kv && !q.p) q.p = kv; } catch (e) { /* a broken escape: ignore that part */ }
+    });
+    var home = DATA.sjv ? 'sjv' : ORDER[0], id = q.p === 'world' && OBS.length ? 'world' : DATA[q.p] ? q.p : home;
+    restoring = true;
+    try {
+      state.showGps = q.gps !== '0'; state.showLines = q.lines !== '0'; state.base = q.b === 'plain' ? 'map' : 'sat';
+      setBasemap(); syncLayerUi();
+      if (state.view === '3d' && q.v !== '3d') setView('2d');
+      if (id === 'world') {
+        if (!state.site) selectSite(home);
+        showWorld();
+        var e = q.q && obsEntry(q.q);
+        if (e) { ui.worldSel = e.id; worldCard(e); if (world) setTimeout(function () { world.setView([e.lat, e.lon], 5); }, 80); } else worldIntro();
+      } else {
+        root.setAttribute('data-mode', 'site');
+        selectSite(id);
+        var s = state.site, di = q.d ? s.dates.indexOf(q.d) : -1;
+        if (q.f === '0') setShade(false);
+        if (q.cmp) { state.swipe = Math.max(0.04, Math.min(0.96, (+q.cmp || 50) / 100)); setCompare(true, true); }
+        if (di >= 0) setDate(di);
+        if (q.st && s.gps.some(function (g) { return g.id === q.st; })) select({ type: 'gps', id: q.st });
+        else if (q.pt && /^-?[\d.]+,-?[\d.]+$/.test(q.pt)) select({ type: 'point', lat: +q.pt.split(',')[0], lon: +q.pt.split(',')[1] });
+        else if (q.ln && (s.alignments || []).some(function (x) { return x.name === q.ln; })) select({ type: 'alignment', name: q.ln });
+        else if (q.pl && (s.places || []).some(function (x) { return x.name === q.pl && x.series_cm; })) select({ type: 'place', name: q.pl });
+        else if ((q.tab === 'crops' || q.tab === 'people') && stepDefs(s).some(function (d) { return d[0] === q.tab; })) runStep(q.tab);
+        if (q.v === '3d') setView('3d');
+      }
+    } finally { restoring = false; }
+    renderTour();
+  }
+  function shareLink() {
+    var url = String(location.href).split('#')[0] + '#' + encodeState();
+    try { history.replaceState(null, '', '#' + encodeState()); } catch (e) { /* file:// in some browsers */ }
+    function done(ok) { toast(ok ? 'Link to this view copied' : 'The link to this view is in the address bar'); }
+    function legacy() {
+      try {
+        var t = document.createElement('textarea'); t.value = url; t.setAttribute('readonly', ''); t.style.position = 'fixed'; t.style.opacity = '0';
+        document.body.appendChild(t); t.select(); var ok = document.execCommand('copy'); document.body.removeChild(t); done(ok);
+      } catch (e) { done(false); }
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(url).then(function () { done(true); }, legacy); else legacy();
+    return url;
+  }
+
+  // ----- export: take the data away
+  function exportStatus(s) {
+    var k = group3(obsEntry(s.id));
+    if (s.id === 'sjv' && TRUST) return { 1: 'confirmed', 2: 'filtered_farmland', 3: 'not_checked_edge', 4: 'not_checked_hills' };
+    return k === 'checked' ? 'checked_against_gps' : 'measured_not_checked';
+  }
+  function exportCells(s) {
+    var g = s.grid, f = gridFrames(s)[state.i], b = s.overlay.bounds, yN = mercY(b[1][0]), yS = mercY(b[0][0]), st = exportStatus(s), m = typeof st === 'object' ? trustMask() : null, out = [];
+    for (var row = 0; row < g.height; row++) {
+      var lat = (2 * Math.atan(Math.exp(yN - (row + 0.5) / g.height * (yN - yS))) - Math.PI / 2) * 180 / Math.PI;
+      for (var col = 0; col < g.width; col++) {
+        var k = row * g.width + col, v = f[k];
+        if (v === g.nodata) continue;
+        var status = m ? st[m[k]] : st;
+        if (!status) continue;
+        out.push([+lat.toFixed(5), +(b[0][1] + (col + 0.5) / g.width * (b[1][1] - b[0][1])).toFixed(5), m && m[k] !== 1 ? null : +(v * g.step_cm).toFixed(2), status]);
+      }
+    }
+    return out;
+  }
+  function exportHead(s) {
+    return ['Groundline export: ' + fullName(s.id) + '. Ground movement from ' + fmtDate(s.dates[0]) + ' to ' + fmtDate(s.dates[state.i]) + ', in cm (' + s.quantity.label + '; negative = sinking).',
+      'Source data: NISAR L2 GUNW (NASA/ISRO) via the ASF DAAC. Processed by Groundline for the NASA Space Apps Challenge 2026.',
+      'Licence: Apache-2.0, as the Groundline repository. Credit "Groundline, from NISAR (NASA/ISRO) data". Not for engineering design or enforcement.',
+      s.id === 'sjv' && TRUST ? 'Status: confirmed = town or open land, checked against GPS and the State map. filtered_farmland and not_checked_* cells carry no value: a quick map reads too deep over farmland.'
+        : group3(obsEntry(s.id)) === 'checked' ? 'Status: checked_against_gps = this place was compared with GPS on the ground.' : 'Status: measured_not_checked = not yet checked on the ground; crop areas may need filtering.'];
+  }
+  function exportText(kind) {
+    var s = state.site, cells = exportCells(s), head = exportHead(s);
+    if (kind === 'csv') return head.map(function (l) { return '# ' + l; }).join('\n') + '\nlat,lon,change_cm,status\n' + cells.map(function (c) { return c[0] + ',' + c[1] + ',' + (c[2] == null ? '' : c[2]) + ',' + c[3]; }).join('\n') + '\n';
+    return JSON.stringify({ type: 'FeatureCollection', name: 'groundline_' + s.id, description: head[0], attribution: head[1], licence: head[2], note: head[3], date_from: s.dates[0], date_to: s.dates[state.i],
+      features: cells.filter(function (c) { return c[2] != null; }).map(function (c) { return { type: 'Feature', geometry: { type: 'Point', coordinates: [c[1], c[0]] }, properties: { change_cm: c[2], status: c[3] } }; }) });
+  }
+  function exportNow(kind) {
+    var s = state.site;
+    if (!s || !s.grid) { toast('This place has no cell data to download'); return; }
+    var name = 'groundline_' + s.id + '_' + s.dates[state.i] + (kind === 'csv' ? '.csv' : '.geojson');
+    try {
+      var blob = new Blob([exportText(kind)], { type: kind === 'csv' ? 'text/csv' : 'application/geo+json' }), a = document.createElement('a');
+      a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      setTimeout(function () { URL.revokeObjectURL(a.href); }, 4000);
+      toast('Downloaded ' + name);
+    } catch (e) { toast('The download could not be started'); }
+    closeMenus();
+  }
+  function exportNoteFor(s) {
+    var k = group3(obsEntry(s.id));
+    $('exportNote').textContent = s.id === 'sjv' && TRUST ? 'Confirmed cells carry a value. Farmland is listed as filtered, without one.'
+      : k === 'checked' ? 'Values at the date on the timeline.' : 'Not yet checked on the ground; crop areas may need filtering.';
+  }
+
+  function initShell() {
+    ui.panelOpen = true;
+    $('panelToggle').addEventListener('click', function () { setPanel(!ui.panelOpen); });
+    $('layersBtn').addEventListener('click', function (e) { if (e && e.stopPropagation) e.stopPropagation(); toggleMenu('layersBtn', 'layersMenu'); });
+    $('exportBtn').addEventListener('click', function (e) { if (e && e.stopPropagation) e.stopPropagation(); toggleMenu('exportBtn', 'exportMenu'); });
+    Array.prototype.forEach.call(document.querySelectorAll('[data-export]'), function (b) { b.addEventListener('click', function () { exportNow(b.getAttribute('data-export')); }); });
+    document.addEventListener('click', function (e) {
+      var t = e.target;
+      while (t && t !== document.body) { if (t.classList && (t.classList.contains('menu') || t.classList.contains('search'))) return; t = t.parentNode; }
+      closeMenus();
+    });
+    $('zoomIn').addEventListener('click', function () { var m = inWorld() ? world : map; if (m) m.zoomIn(1); });
+    $('zoomOut').addEventListener('click', function () { var m = inWorld() ? world : map; if (m) m.zoomOut(1); });
+    $('worldBtn').addEventListener('click', function () { if (inWorld()) goPlace(state.site ? state.site.id : ORDER[0]); else goWorld(null); });
+    $('shareBtn').addEventListener('click', shareLink);
+    $('tourBtn').addEventListener('click', startTour);
+    $('tourExit').addEventListener('click', exitTour);
+    $('aboutBtn').addEventListener('click', function () { closeMenus(); $('aboutDialog').hidden = false; if ($('aboutClose').focus) $('aboutClose').focus(); });
+    $('aboutClose').addEventListener('click', function () { $('aboutDialog').hidden = true; });
+    $('aboutDialog').addEventListener('click', function (e) { if (e && e.target === $('aboutDialog')) $('aboutDialog').hidden = true; });
+    $('compareToggle').addEventListener('change', function (e) { setCompare(!!e.target.checked); });
+    $('gpsToggle').addEventListener('change', function (e) { state.showGps = !!e.target.checked; redrawVectors(); });
+    $('linesToggle').addEventListener('change', function (e) { state.showLines = !!e.target.checked; redrawVectors(); });
+    Array.prototype.forEach.call(document.querySelectorAll('#baseSeg [data-base]'), function (b) { b.addEventListener('click', function () { setBase(b.getAttribute('data-base')); syncHash(); }); });
+    document.addEventListener('keydown', function (e) {
+      if (!e || e.key !== 'Escape') return;
+      if (!$('aboutDialog').hidden) $('aboutDialog').hidden = true; else closeMenus();
+    });
+    var mid = ramp(-0.62), up = ramp(0.6), rgb = function (c) { return 'rgb(' + Math.round(c[0]) + ',' + Math.round(c[1]) + ',' + Math.round(c[2]) + ')'; };
+    if (root.style && root.style.setProperty) { root.style.setProperty('--radar', rgb(mid)); root.style.setProperty('--sink', rgb(mid)); root.style.setProperty('--gps', rgb(up)); root.style.setProperty('--rise', rgb(up)); }
+    initSearch(); initSwipe();
+    var G = window.Groundline3D;                                   // the 3D surface uses the same colour ramp as the map and the legend
+    if (G && G.math) G.math.colour = function (v, vmax, out, o) { var c = ramp(Math.max(-1, Math.min(1, v / vmax))); out[o] = c[0] / 255; out[o + 1] = c[1] / 255; out[o + 2] = c[2] / 255; };
+  }
+
+  // ----- the optional guided tour runs as an overlay and hands the explorer back as it was
+  function startTour() {
+    tour.resume = encodeState(); tour.active = true;
+    root.classList.add('touring'); closeMenus(); setPanel(true);
+    if (state.compare) setCompare(false, true);
+    tourGo(0);
+  }
+  function exitTour() {
+    if (!tour.active) return;
+    tour.active = false; root.classList.remove('touring'); stop();
+    applyHash(tour.resume || '');
+    syncHash();
   }
 
   // ---------- site selection
@@ -1598,6 +2018,7 @@
     markActs();
     var sl = $('dateSlider'); sl.max = s.dates.length - 1;
     placeHead(s); buildSteps(s); results(s); limits(s); legend(s); buildPicker(s);
+    timelineFor(s); exportNoteFor(s); state.compare = false; $('swipe').hidden = true; $('compareToggle').checked = false;
     loadSiteOnMap(s); layerControls(s); setDate(state.i); renderDetail();
     setShade(state.shade);
     if (state.view === '3d') setView('3d');                              // rebuild the surface for the new case (or fall back to 2D)
@@ -1606,19 +2027,19 @@
     if ($('more').open) { freshness(s); freshFor = s.id; }
     if (!quiet) defaultBox(s);
     $('buildInfo').textContent = 'Data file for this place built ' + s.provenance.generated_utc.replace('T', ' ').replace('Z', ' UTC') + '. ' + provenanceText(s.provenance.built_by);
-    if (!inWorld()) { try { history.replaceState(null, '', '#' + id); } catch (e) { /* file:// in some browsers */ } }
+    updateSwipe(); syncHash();
   }
 
   // ---------- start
   function start() {
-    initTheme();
-    if (!ORDER.length) { $('stepBox').innerHTML = '<p class="plain"><strong>No data files found.</strong> Expected site/data/*.js next to this page.</p>'; return; }
-    initMap(); initView(); buildSwitch(); initTour(); initWorld();
-    var sl = $('dateSlider');
+    if (!ORDER.length) { fail('Groundline could not read its data files (data/*.js next to this page). Check the connection and try again.'); return; }
+    initMap(); initView(); buildSwitch(); initTour(); initWorld(); initShell();
+    var sl = $('dateSlider'), tr = $('track');
     sl.addEventListener('input', function (e) { stop(); setDate(+e.target.value); });
-    sl.addEventListener('pointerup', function () { if (sl.blur) sl.blur(); });          // so the arrow keys go back to the tour
+    sl.addEventListener('pointerdown', function () { tr.classList.add('drag'); });
+    sl.addEventListener('pointerup', function () { tr.classList.remove('drag'); });
     $('playBtn').addEventListener('click', function () { if (state.timer) stop(); else play(); });
-    $('shadeToggle').addEventListener('change', function (e) { setShade(!!e.target.checked); });
+    $('shadeToggle').addEventListener('change', function (e) { setShade(!!e.target.checked, 'now'); });
     $('more').addEventListener('toggle', function () { if ($('more').open && state.site && freshFor !== state.site.id) { freshness(state.site); freshFor = state.site.id; } });
     $('picker').addEventListener('change', function (e) {
       var v = e.target.value, k = v.indexOf(':');
@@ -1631,12 +2052,18 @@
         if (state.sel) renderDetail(); else if (ui.step === 'crops' && ui.box === 'step') cropsChart();
         if (map) map.invalidateSize(false); if (world && inWorld()) world.invalidateSize(false);
         if (view3d && state.view === '3d') view3d.resize();
+        tr.style.setProperty('--w', (tr.clientWidth || 0) + 'px'); markSteps(); updateSwipe();
       }, 180);
     });
-    var wanted = (location.hash || '').slice(1);
-    if (wanted === 'world' && OBS.length) { selectSite(DATA.sjv ? 'sjv' : ORDER[0]); openAct('world'); }
-    else if (DATA[wanted] && tourIndex(wanted, 'intro') < 0) { document.documentElement.setAttribute('data-mode', 'site'); selectSite(wanted); renderTour(); }
-    else tourGo(0);
+    window.addEventListener('hashchange', function () { if (!tour.active && String(location.hash || '').slice(1) !== encodeState()) applyHash(location.hash); });
+    applyHash(location.hash || '');
+    tr.style.setProperty('--w', (tr.clientWidth || 0) + 'px'); markSteps();
+    root.setAttribute('data-ready', '1');
+    window.Groundline = { state: encodeState, apply: applyHash, exportText: exportText, share: shareLink, startTour: startTour };   // for the browser tests
   }
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start); else start();
+  function boot() {
+    try { start(); }
+    catch (e) { try { fail('Something went wrong while starting: ' + (e && e.message ? e.message : e)); } catch (e2) { /* nothing to show it in */ } throw e; }
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();
 })();

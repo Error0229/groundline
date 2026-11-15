@@ -1,4 +1,4 @@
-// Runs site/app.js against a tiny fake page (no browser) and exercises every panel and the guided tour:
+// Runs site/app.js against a tiny fake page (no browser) and exercises the explorer, every panel and the optional tour:
 //   node pipeline/smoke_test.js
 // Two passes: without a map library (the offline fallback) and with a stand-in for Leaflet that accepts
 // any call, so the map code paths run too. It catches exceptions, missing data fields, and regressions in the
@@ -14,8 +14,8 @@ function run(withMap) {
   function element(id) {
     const listeners = {}, attrs = {};
     return {
-      id, style: {}, children: [], value: '', hidden: false, open: false, checked: false, disabled: false, selectedIndex: 0, clientWidth: 380, scrollTop: 0, _html: '', textContent: '',
-      classList: { toggle() {}, add() {}, remove() {} },
+      id, style: { setProperty() {} }, children: [], value: '', hidden: false, open: false, checked: false, disabled: false, selectedIndex: 0, clientWidth: 380, scrollTop: 0, _html: '', textContent: '',
+      classList: { toggle() {}, add() {}, remove() {}, contains() { return false; } },
       set innerHTML(v) { this._html = String(v); this.children = []; this._inner = null; }, get innerHTML() { return this._html; },
       setAttribute(k, v) { attrs[k] = String(v); }, getAttribute(k) { return attrs[k]; }, removeAttribute(k) { delete attrs[k]; },
       appendChild(c) { this.children.push(c); return c; },
@@ -39,6 +39,7 @@ function run(withMap) {
       return anything;
     },
     apply() { return anything; },
+    construct() { return anything; },
   });
   const window = { addEventListener() {}, matchMedia: () => ({ matches: false }) };
   const ctx = { window, document, location: { hash: '' }, history: { replaceState() {} }, localStorage: { getItem: () => null, setItem() {} },
@@ -50,7 +51,7 @@ function run(withMap) {
   vm.runInContext(read('app.js'), ctx, { filename: 'app.js' });
   // The map's own handlers (click, focus, blur) are registered first, once; the rest belong to the shapes
   // of whichever case was loaded at start-up and are re-created on every switch.
-  const mapHandlers = handlers.slice(0, handlers.findIndex(hd => hd.type === 'blur') + 1);
+  const mapHandlers = handlers.filter(hd => hd.type === 'click').slice(0, 1);   // the map's own click handler is registered first
   const el = id => document.getElementById(id), html = id => el(id).innerHTML + el(id).children.map(c => c.innerHTML).join('') + el(id).textContent;
   const must = (ok, msg) => { if (!ok) throw new Error((withMap ? '[map] ' : '[no map] ') + msg); };
 
@@ -66,19 +67,31 @@ function run(withMap) {
     states++;
   }
 
-  // ---- the landing view and the guided tour, driven by the arrow keys
-  must(document.documentElement.getAttribute('data-mode') === 'site' && /San Joaquin/.test(el('placeKicker').textContent), 'the landing place must be San Joaquin Valley');
-  must(/60%/.test(html('stepBox')) && /\$326 million/.test(html('stepBox')), 'the landing view must state the problem');
-  must(/only counts what it can confirm/.test(el('headline').textContent), 'page headline');
+  // ---- the explorer opens on San Joaquin Valley with the confirmed map and the conservative figure
+  const mode = () => document.documentElement.getAttribute('data-mode'), G = window.Groundline;
+  const home = () => mode() === 'site' && /San Joaquin/.test(el('placeKicker').textContent) && /170,900/.test(html('stepBox')) && /at least/.test(html('stepBox')) && el('shadeToggle').checked === true;
+  must(!!G && document.documentElement.getAttribute('data-ready') === '1', 'the app did not finish starting');
+  must(home(), 'the explorer must open on San Joaquin Valley: confirmed map, conservative floor');
+  must(/farmland: filtered out/.test(html('legend')), 'the legend must mark filtered-out farmland while the filter is on');
+  must(!/24 GPS station/.test(html('statusChip')) && /crop signal filtered out/.test(html('statusChip')), 'San Joaquin status label must say the crop signal is filtered out, and not imply farmland is validated');
+  must(G.state() === 'p=sjv', 'default share state should be just the place, got ' + G.state());
   const key = k => docKeys.forEach(fn => fn({ key: k, target: { tagName: 'BODY' }, preventDefault() {}, stopPropagation() {} }));
-  const seen = [el('tourCaption').textContent];
-  for (let i = 0; i < 12 && !/Start again/.test(el('tourNext').innerHTML); i++) { key('ArrowRight'); expectClean('tour step ' + (i + 2)); seen.push(el('tourCaption').textContent); }
+  key('ArrowRight'); must(home(), 'arrow keys must do nothing outside the tour');
+
+  // ---- the optional tour: six steps as an overlay, then back to the explorer as it was
+  el('tourBtn').fire('click');
+  const seen = [el('tourCaption').textContent], words = t => t.replace(/<[^>]+>/g, '').trim().split(/\s+/).length;
+  must(/60%/.test(html('stepBox')) && /\$326 million/.test(html('stepBox')), 'the first tour step must state the problem');
+  for (let i = 0; i < 12 && !/Finish/.test(el('tourNext').textContent); i++) {
+    key('ArrowRight'); expectClean('tour step ' + (i + 2)); seen.push(el('tourCaption').textContent);
+    if (mode() === 'site') must(words(el('placeTitle').innerHTML) <= 8, 'heading over 8 words: ' + el('placeTitle').innerHTML);
+  }
   must(seen.length === 6, 'expected a 6-step tour, got ' + seen.length + ': ' + seen.join(' | '));
-  seen.forEach(c => must(c.split(/\s+/).length <= 17, 'tour caption over 17 words: ' + c));
-  must(/can confirm/.test(seen[4]) && /only counts what it can confirm/.test(seen[5]), 'tour order: what we can confirm, then the world map with the closing sentence');
+  seen.forEach(c => must(words(c) <= 17, 'tour caption over 17 words: ' + c));
+  must(/can confirm/.test(seen[4]) && /See the ground sinking before something breaks/.test(seen[5]), 'tour order: what we can confirm, then the world map with the tagline');
   must(/within a centimetre or two of GPS/.test(seen[2]), 'town step caption must not overstate the agreement');
-  must(document.documentElement.getAttribute('data-mode') === 'world', 'the tour must end on the world view');
-  must(/It runs anywhere/.test(html('worldTitle')), 'the tour must close on the world step');
+  must(!/wrong|fool/i.test(seen.join(' ')), 'tour captions must not say the satellite is wrong');
+  must(mode() === 'world', 'the tour must end on the world view');
   must((html('worldLegend').match(/class="wl"/g) || []).length === 3, 'the world legend must have exactly three states');
   const mx = window.IMPACT.mexico_city.exposure.people.ge_5cm.people, total = Math.round((mx + T.people.ge_5cm_floor) / 1e5) / 10;
   const obs = window.OBSERVATORY.filter(e => e.status === 'validated' || e.status === 'measured').length;
@@ -88,26 +101,39 @@ function run(withMap) {
   must(/open-mx/.test(html('worldCard')) && /Mexico City/.test(html('worldNotes')), 'world step must offer Mexico City as the best-checked example');
   key('ArrowLeft'); must(/170,900/.test(html('impact')) && /at least/.test(html('impact')), 'San Joaquin must show the conservative floor');
   must(!/14\.1|sank 10 cm or more<|Worst stretches/.test(html('impact')), 'San Joaquin must not show the worst-stretch or 10 cm figures');
-  key('ArrowLeft'); must(/32 of 32/.test(html('stepBox')) && el('shadeToggle').checked === true, 'fields step: evidence and shading on');
-  must(/farmland: filtered out/.test(html('legend')), 'the legend must mark filtered-out farmland while the filter is on');
-  key('ArrowLeft'); must(new RegExp('GPS station ' + T.town_check.station).test(html('placeTitle')) && el('shadeToggle').checked === false, 'town step: the town GPS station, shading off');
-  must(!/24 GPS station/.test(html('statusChip')) && /crop signal filtered out/.test(html('statusChip')), 'San Joaquin status label must say the crop signal is filtered out, and not imply farmland is validated');
+  key('ArrowLeft'); must(/32 of 32/.test(html('stepBox')) && el('shadeToggle').checked === true, 'farmland step: evidence and filter on');
+  must(/quick map reads too deep/.test(html('placeTitle')), 'farmland step heading');
+  key('ArrowLeft'); must(new RegExp('GPS station ' + T.town_check.station).test(html('placeTitle')) && el('shadeToggle').checked === false, 'town step: the town GPS station, filter off');
   must(!/inconclusive/i.test(html('statusChip') + html('stepBox') + html('detail') + html('placeTitle')), 'the OPERA "inconclusive" note belongs in Details and limits only');
+  key('ArrowRight'); key('ArrowRight'); key('ArrowRight'); key('ArrowRight');
+  must(home(), 'finishing the tour must return to the explorer as it was');
+  el('tourBtn').fire('click'); key('ArrowRight'); key('Escape');
+  must(home(), 'leaving the tour with Escape must return to the explorer');
 
-  // ---- the text rule: every tour step shows one heading of at most 8 words and no paragraph that repeats the caption
-  key('ArrowLeft'); key('ArrowLeft');
-  for (let i = 0; i < 5; i++) {
-    const head = el('placeTitle').innerHTML.replace(/<[^>]+>/g, '').trim(), box = ['stepBox', 'detail', 'impact'].find(id => !el(id).hidden);
-    must(head.split(/\s+/).length <= 8, 'heading over 8 words: ' + head);
-    must(!/class="(plain|lead|note|small muted)"/.test(el(box).innerHTML), 'step ' + (i + 1) + ': paragraph text at top level of #' + box);
-    key('ArrowRight');
+  // ---- share links round-trip
+  for (const h of ['p=sjv&d=' + data.sjv.dates[5] + '&f=0&st=' + T.town_check.station, 'p=sjv&cmp=30&gps=0&lines=0&b=plain', 'p=sjv&pt=36.9000,-120.0000', 'p=sjv&tab=crops', 'p=mexico_city&st=MMX1', 'p=world&q=jakarta', 'p=world']) {
+    G.apply('#' + h); expectClean('share ' + h);
+    must(G.state() === h, 'share link does not round-trip: ' + h + ' -> ' + G.state());
   }
+  G.apply('#p=world&q=jakarta'); must(/Jakarta/.test(html('worldTitle')), 'a share link to a world place must open its card');
+  must(/Not mapped yet/.test(html('worldCard')), 'a known place that is not mapped needs an honest card');
+  G.apply('#nonsense=1&p=zzz'); must(home(), 'a broken link must fall back to the explorer default');
+
+  // ---- export: farmland never carries a value
+  G.apply('#p=sjv');
+  const csv = G.exportText('csv').split('\n'), rows = csv.filter(l => l && l[0] !== '#').slice(1);
+  must(csv[0].startsWith('# Groundline export') && csv.some(l => l === 'lat,lon,change_cm,status'), 'CSV header');
+  must(rows.every(l => l.split(',').length === 4), 'CSV rows must have four columns');
+  must(rows.filter(l => /,confirmed$/.test(l)).length === T.mask.cells['1'] && rows.filter(l => /,filtered_farmland$/.test(l)).length > 1000, 'CSV must list every confirmed cell and the filtered farmland');
+  must(rows.every(l => /,confirmed$/.test(l) ? /,-?\d+(\.\d+)?,confirmed$/.test(l) : /,,[a-z_]+$/.test(l)), 'only confirmed cells may carry a value in the export');
+  const gj = JSON.parse(G.exportText('geojson'));
+  must(gj.type === 'FeatureCollection' && gj.features.length === T.mask.cells['1'] && gj.features.every(f => f.properties.status === 'confirmed' && f.geometry.coordinates.length === 2) && /Apache-2.0/.test(gj.licence), 'GeoJSON export');
 
   // ---- every place: its buttons, the look-up menu, the slider, map clicks, details
   for (const id of Object.keys(data)) {
     const s = data[id];
     handlers.length = 0;
-    el('placeSelect').fire('change', { target: { value: id } });
+    G.apply('#p=' + id);
     expectClean(id + ' initial');
     must(el('placeTitle').innerHTML.length > 10 && el('statusChip').textContent.length > 5, id + ': no headline or status label');
     const entry = (window.OBSERVATORY || []).find(e => e.id === id);
@@ -131,4 +157,4 @@ function run(withMap) {
 }
 
 const total = run(false) + run(true);
-console.log('smoke test passed: ' + total + ' panel states rendered without undefined/NaN; tour order, conservative numbers and the three world states hold');
+console.log('smoke test passed: ' + total + ' panel states rendered without undefined/NaN; explorer default, tour, share links, export, conservative numbers and the three world states hold');

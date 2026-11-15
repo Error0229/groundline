@@ -10,7 +10,15 @@ const need = (ok, msg) => { if (!ok) problems.push(msg); };
 const html = fs.readFileSync(path.join(site, 'index.html'), 'utf8');
 const local = [...html.matchAll(/(?:src|href)="([^"#]+)"/g)].map(m => m[1]).filter(u => !/^(https?:|mailto:|data:)/.test(u));
 local.forEach(u => need(fs.existsSync(path.join(site, u)), 'index.html references missing file ' + u));
-need(/cdnjs\.cloudflare\.com\/ajax\/libs\/leaflet\/\d+\.\d+\.\d+\/leaflet\.js/.test(html), 'Leaflet must come from cdnjs with an exact version');
+// the page must work offline: libraries and fonts are bundled, nothing is loaded from a CDN
+need(/src="vendor\/leaflet\.js"/.test(html) && /src="vendor\/three\.min\.js"/.test(html), 'Leaflet and three.js must be loaded from site/vendor');
+need(!/(?:src|href)="https?:\/\/[^"]+\.(?:js|css)/.test(html) && !/fonts\.(?:googleapis|gstatic)/.test(html), 'index.html must not load scripts, styles or fonts from the network');
+const css = fs.readFileSync(path.join(site, 'style.css'), 'utf8');
+[...css.matchAll(/url\(([^)]+)\)/g)].map(m => m[1].replace(/['"]/g, '')).filter(u => !/^(data:|#)/.test(u)).forEach(u => need(!/^https?:/.test(u) && fs.existsSync(path.join(site, u)), 'style.css references a missing or remote file: ' + u));
+['fonts/OFL-FiraSans.txt', 'fonts/OFL-Overpass.txt', 'base/world.jpg', 'base/views.js'].forEach(u => need(fs.existsSync(path.join(site, u)), 'bundled file missing: ' + u));
+need(/--t-micro/.test(css) && /--t-comp/.test(css) && /--t-scene/.test(css) && /prefers-reduced-motion/.test(css), 'style.css must define the motion tokens and honour prefers-reduced-motion');
+need(html.includes('See the ground sinking before something breaks.') && html.includes("A sinking-ground map from NASA's newest radar, checked on the ground."), 'index.html must carry the tagline and the sub-line');
+need(!/only counts what it can confirm/.test(html + fs.readFileSync(path.join(site, 'app.js'), 'utf8')), 'the old headline must not appear on the online page');
 const ids = [...fs.readFileSync(path.join(site, 'app.js'), 'utf8').matchAll(/\$\('([A-Za-z0-9]+)'\)/g)].map(m => m[1]);
 [...new Set(ids)].forEach(id => { if (!['fallbackImg', 'recheck'].includes(id)) need(html.includes('id="' + id + '"'), 'app.js uses #' + id + ' which index.html does not define'); });
 

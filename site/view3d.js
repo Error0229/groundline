@@ -125,6 +125,18 @@
   function loadImagery(sc, url, maxPx, done, maxTiles, maxZ) {
     var key = url + '|' + maxPx + '|' + [sc.west, sc.south, sc.east, sc.north].join(',');
     if (imageryCache[key]) { done(imageryCache[key]); return; }
+    if (/^data:/.test(url)) {                               // one picture that covers the bounds exactly, rows even in Web Mercator
+      var pic = new Image();
+      pic.onload = function () {
+        var pc = document.createElement('canvas'), px = pc.getContext && pc.getContext('2d');
+        if (!px) { done(null, 'no 2D canvas'); return; }
+        pc.width = pic.naturalWidth; pc.height = pic.naturalHeight; px.drawImage(pic, 0, 0);
+        imageryCache[key] = pc; done(pc);
+      };
+      pic.onerror = function () { done(null, 'the bundled picture could not be read'); };
+      pic.src = url;
+      return;
+    }
     var plan = math.tilePlan(sc, maxPx, maxTiles || 120, maxZ);
     if (!plan) { done(null, 'no tile zoom level fits these bounds'); return; }
     var c = document.createElement('canvas'), ctx = c.getContext && c.getContext('2d', maxTiles ? { willReadFrequently: true } : undefined);
@@ -586,6 +598,8 @@
     var api = window.Groundline3D.current = {                // the live view, for debugging and the browser tests
       setSite: setSite, setDate: setDate, resize: resize, reset: reset, restyle: restyle,
       setExaggeration: function (m) { mult = m; if (S) apply(); },
+      spin: function (d) { orbit.theta += d; requestRender(); },                       // slow turn, driven by the presentation
+      view: function (o) { if (o.theta != null) orbit.theta = o.theta; if (o.phi != null) orbit.phi = o.phi; if (o.radius != null) orbit.radius = o.radius; clamp(); requestRender(); },
       pick: pick, pinScreen: function (id) {                // canvas position of a station (used by tests)
         var p = S && S.pins.filter(function (q) { return q.pick.id === id; })[0];
         if (!p) return null;
