@@ -3,9 +3,11 @@
    No NASA or Space Apps marks are used. Dark is the identity; there is no light theme. */
 @font-face { font-family: 'Fira Sans'; font-weight: 700; font-display: swap; src: url(fonts/fira-sans-700.woff2) format('woff2'); }
 @font-face { font-family: 'Fira Sans'; font-weight: 900; font-display: swap; src: url(fonts/fira-sans-900.woff2) format('woff2'); }
-@font-face { font-family: 'Overpass'; font-weight: 400; font-display: swap; src: url(fonts/overpass-400.woff2) format('woff2'); }
-@font-face { font-family: 'Overpass'; font-weight: 600; font-display: swap; src: url(fonts/overpass-600.woff2) format('woff2'); }
-@font-face { font-family: 'Overpass'; font-weight: 700; font-display: swap; src: url(fonts/overpass-700.woff2) format('woff2'); }
+/* Overpass ships with a deep descent (ascent 88%, descent 38%, caps 70%), so its letters sat ~10% of the size above the middle of every
+   button, badge and row. The overrides keep the same total height but centre the capitals, like Fira Sans. */
+@font-face { font-family: 'Overpass'; font-weight: 400; font-display: swap; src: url(fonts/overpass-400.woff2) format('woff2'); ascent-override: 97%; descent-override: 29%; line-gap-override: 0%; }
+@font-face { font-family: 'Overpass'; font-weight: 600; font-display: swap; src: url(fonts/overpass-600.woff2) format('woff2'); ascent-override: 97%; descent-override: 29%; line-gap-override: 0%; }
+@font-face { font-family: 'Overpass'; font-weight: 700; font-display: swap; src: url(fonts/overpass-700.woff2) format('woff2'); ascent-override: 97%; descent-override: 29%; line-gap-override: 0%; }
 
 :root {
   /* colour: brand */
@@ -125,6 +127,7 @@ html[data-mode="site"] .wlegend, html[data-mode="site"] .world-panel { display: 
 .menu.results { top: calc(100% + 8px); left: 0; right: 0; max-height: min(60vh, 440px); overflow: auto; }
 .menu.layers { top: 0; left: calc(100% + 8px); width: 300px; padding: var(--s-3) var(--s-3) var(--s-2); }
 .pop.up .menu { bottom: calc(100% + 8px); right: 0; top: auto; transform-origin: bottom right; transform: scale(.94) translateY(6px); }
+.panel-actions .pop.up .menu { right: auto; left: 0; transform-origin: bottom left; }   /* the Download button sits near the panel's left edge: open rightward, inside the panel */
 .pop.up .menu.open { transform: none; }
 .menu h3 { font-size: var(--fs-0); letter-spacing: .12em; text-transform: uppercase; color: var(--muted); margin: 0 0 var(--s-2); }
 .res { all: unset; box-sizing: border-box; cursor: pointer; display: grid; grid-template-columns: 18px 1fr auto; align-items: center; gap: var(--s-2); width: 100%; padding: 8px 10px; border-radius: var(--r-2);
