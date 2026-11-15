@@ -1,0 +1,128 @@
+{
+ "_about": "existing_service for the 25 observatory.js entries, by point-in-polygon of lat/lon against the approximate footprints in site/data/coverage_services.js (2026-11-14).",
+ "mexico_city": {
+  "existing_service": "OPERA_DISP_S1",
+  "country": "Mexico",
+  "status": "validated"
+ },
+ "sjv": {
+  "existing_service": "OPERA_DISP_S1",
+  "country": "United States",
+  "status": "validated"
+ },
+ "tehran": {
+  "existing_service": null,
+  "country": "Iran",
+  "status": "measured"
+ },
+ "mashhad": {
+  "existing_service": null,
+  "country": "Iran",
+  "status": "measured"
+ },
+ "rafsanjan": {
+  "existing_service": null,
+  "country": "Iran",
+  "status": "measured"
+ },
+ "konya": {
+  "existing_service": null,
+  "country": "Turkey",
+  "status": "measured"
+ },
+ "celaya": {
+  "existing_service": "OPERA_DISP_S1",
+  "country": "Mexico",
+  "status": "measured"
+ },
+ "houston": {
+  "existing_service": "OPERA_DISP_S1",
+  "country": "United States",
+  "status": "refused"
+ },
+ "jakarta": {
+  "existing_service": null,
+  "country": "Indonesia",
+  "status": "refused"
+ },
+ "bangkok": {
+  "existing_service": null,
+  "country": "Thailand",
+  "status": "refused"
+ },
+ "hcmc": {
+  "existing_service": null,
+  "country": "Vietnam",
+  "status": "refused"
+ },
+ "eloy": {
+  "existing_service": "OPERA_DISP_S1",
+  "country": "United States",
+  "status": "refused"
+ },
+ "aguascalientes": {
+  "existing_service": "OPERA_DISP_S1",
+  "country": "Mexico",
+  "status": "refused"
+ },
+ "beijing": {
+  "existing_service": null,
+  "country": "China",
+  "status": "refused"
+ },
+ "delhi": {
+  "existing_service": null,
+  "country": "India",
+  "status": "refused"
+ },
+ "quetta": {
+  "existing_service": null,
+  "country": "Pakistan",
+  "status": "refused"
+ },
+ "semarang": {
+  "existing_service": null,
+  "country": "Indonesia",
+  "status": "not_processed"
+ },
+ "bandung": {
+  "existing_service": null,
+  "country": "Indonesia",
+  "status": "not_processed"
+ },
+ "tianjin": {
+  "existing_service": null,
+  "country": "China",
+  "status": "not_processed"
+ },
+ "kathmandu": {
+  "existing_service": null,
+  "country": "Nepal",
+  "status": "not_processed"
+ },
+ "lagos": {
+  "existing_service": null,
+  "country": "Nigeria",
+  "status": "not_processed"
+ },
+ "morelia": {
+  "existing_service": "OPERA_DISP_S1",
+  "country": "Mexico",
+  "status": "not_processed"
+ },
+ "queretaro": {
+  "existing_service": "OPERA_DISP_S1",
+  "country": "Mexico",
+  "status": "not_processed"
+ },
+ "yunlin": {
+  "existing_service": null,
+  "country": "Taiwan",
+  "status": "not_processed"
+ },
+ "isfahan": {
+  "existing_service": null,
+  "country": "Iran",
+  "status": "not_processed"
+ }
+}

@@ -1,0 +1,63 @@
+# UNTESTED: written during the hackathon and never run on GitHub. Read it before enabling.
+#
+# Once a day: rebuild each published case study from public data and commit the result if it changed.
+# refresh.py exits 0 without touching anything when no new radar pair has been published, and exits 2
+# (quality gate) or 3 (georeferencing) without writing when a new stack should not be trusted. Those two
+# are reported as a failed run so that somebody looks, and the site keeps showing the previous data.
+#
+# San Joaquin Valley is deliberately NOT in the list: its site layer comes from the research export
+# (see README, "Limitations"), and refresh.py does not rebuild that yet.
+name: Refresh subsidence data
+
+# Schedule disabled: the published data now comes from pipeline v2 (full GUNW HDF5, processed offline;
+# see README). This job still runs the preview pipeline and would overwrite the v2 files.
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: refresh-data
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      max-parallel: 1             # one commit at a time
+      matrix:
+        site: [mexico_city]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: pip install -r pipeline/requirements.txt
+      - name: Cache downloaded previews
+        uses: actions/cache@v4
+        with:
+          path: pipeline/cache
+          key: previews-${{ matrix.site }}-${{ github.run_id }}
+          restore-keys: previews-${{ matrix.site }}-
+      - name: Rebuild ${{ matrix.site }}
+        run: python pipeline/refresh.py ${{ matrix.site }}
+      - name: Check the site still hangs together
+        run: |
+          node pipeline/check_site.js
+          node pipeline/smoke_test.js
+      - name: Commit updated data
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add site/data site/img
+          if git diff --cached --quiet; then
+            echo "No new radar pair; nothing to commit."
+          else
+            git commit -m "Refresh ${{ matrix.site }} data"
+            git pull --rebase
+            git push
+          fi

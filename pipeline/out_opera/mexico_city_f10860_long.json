@@ -1,0 +1,268 @@
+{
+ "status": "ok",
+ "frame": "F10860",
+ "direction": "DESCENDING",
+ "path": "41",
+ "window": {
+  "nisar": [
+   "20251030",
+   "20260323"
+  ],
+  "opera": [
+   "20251028",
+   "20260321"
+  ]
+ },
+ "frames": {
+  "F10860": {
+   "direction": "DESCENDING",
+   "path": "41",
+   "opera": [
+    "20251028",
+    "20260321"
+   ],
+   "points": 426
+  }
+ },
+ "quantity": "vertical-equivalent cumulative change, both maps high-passed with OPERA's 30 km short-wavelength filter",
+ "reference": "median of points in stable areas: Pedregal / UNAM, Chapultepec hills, Sierra de Guadalupe",
+ "metrics": {
+  "n": 380,
+  "r": 0.779,
+  "rms_cm": 1.1,
+  "slope": 0.94,
+  "slope_ci": [
+   0.84,
+   1.02
+  ],
+  "std_ours_cm": 1.64,
+  "std_opera_cm": 1.34
+ },
+ "metrics_alt_sigma": {
+  "n": 380,
+  "r": 0.718,
+  "rms_cm": 1.04,
+  "slope": 0.71,
+  "slope_ci": [
+   0.63,
+   0.8
+  ],
+  "std_ours_cm": 1.4,
+  "std_opera_cm": 1.34
+ },
+ "metrics_vs_unfiltered_ours": {
+  "n": 380,
+  "r": 0.672,
+  "rms_cm": 2.01,
+  "slope": 1.02,
+  "slope_ci": [
+   0.8,
+   1.23
+  ],
+  "std_ours_cm": 2.58,
+  "std_opera_cm": 1.34
+ },
+ "peaks": {
+  "ours_filtered": {
+   "lon": -98.9891,
+   "lat": 19.4177,
+   "cm": -5.9
+  },
+  "opera_filtered": {
+   "lon": -99.0129,
+   "lat": 19.4626,
+   "cm": -5.0
+  },
+  "ours_unfiltered": {
+   "lon": -99.0129,
+   "lat": 19.4626,
+   "cm": -11.0
+  },
+  "offset_km": 5.6
+ },
+ "gps": [
+  {
+   "id": "MMX1",
+   "frame": "F10860",
+   "n": 13,
+   "dates": [
+    "20251030",
+    "20251111",
+    "20251123",
+    "20251205",
+    "20251217",
+    "20251229",
+    "20260110",
+    "20260122",
+    "20260203",
+    "20260215",
+    "20260227",
+    "20260311",
+    "20260323"
+   ],
+   "opera_filtered_cm": [
+    0.0,
+    -0.78,
+    -0.65,
+    -0.69,
+    -1.42,
+    -1.5,
+    -1.94,
+    -2.36,
+    -2.57,
+    -2.74,
+    -3.14,
+    -3.37,
+    -3.37
+   ],
+   "ours_filtered_cm": [
+    0.0,
+    -0.17,
+    -0.48,
+    -0.99,
+    -1.35,
+    -2.1,
+    -2.15,
+    -2.77,
+    -2.75,
+    -3.25,
+    -2.94,
+    -3.89,
+    -3.84
+   ],
+   "gps_up_cm": [
+    0.0,
+    -0.91,
+    -1.28,
+    -2.07,
+    -2.88,
+    -4.19,
+    -4.97,
+    -5.9,
+    -7.08,
+    -7.72,
+    -8.91,
+    -9.6,
+    null
+   ],
+   "ours_vs_gps_published": {
+    "r": 0.998,
+    "rms_cm": 0.55
+   },
+   "r_filtered": 0.972,
+   "rms_filtered_cm": 0.38,
+   "change_date": "20260311",
+   "change_opera_filtered_cm": -3.37,
+   "change_ours_filtered_cm": -3.89,
+   "change_gps_cm": -9.6,
+   "change_ours_unfiltered_cm": -9.78
+  }
+ ],
+ "granules": [
+  "OPERA_L3_DISP-S1_IW_F10860_VV_20250910T123315Z_20251028T123315Z_v1.0_20260307T100528Z",
+  "OPERA_L3_DISP-S1_IW_F10860_VV_20251209T123416Z_20260321T123311Z_v1.0_20260817T212042Z"
+ ],
+ "n_points_sampled": 658,
+ "incidence_deg": [
+  31.0,
+  33.5
+ ],
+ "cos_ours": 0.77,
+ "sigma_km": 5.62,
+ "spacing_km": 2.5,
+ "margin_km": 5.62,
+ "site_data_generated_utc": "2026-11-15T01:52:08Z",
+ "site_data_built_by": "pipeline/v2/run.py",
+ "unfiltered": {
+  "n_cells": 13235,
+  "r": 0.786,
+  "rms_cm": 1.83,
+  "mean_diff_cm": 0.27,
+  "slope": 0.5,
+  "slope_ci": [
+   0.46,
+   0.53
+  ],
+  "slope_note": "Theil-Sen, ours = slope * OPERA + c, 3000 random cells",
+  "peak_ours": {
+   "lon": -99.0498,
+   "lat": 19.2672,
+   "cm": -17.4,
+   "opera_there_cm": -13.3
+  },
+  "peak_opera": {
+   "lon": -99.0407,
+   "lat": 19.2759,
+   "cm": -14.4,
+   "ours_there_cm": -13.0
+  },
+  "peak_offset_km": 1.4,
+  "p01_ours_cm": -10.9,
+  "p01_opera_cm": -12.4,
+  "reference": "F10860: stable areas (239 cells); ours: stable areas (239 cells)",
+  "frames": {
+   "F10860": {
+    "opera": [
+     "20251028",
+     "20260321"
+    ],
+    "granules": [
+     "OPERA_L3_DISP-S1_IW_F10860_VV_20250910T123315Z_20251028T123315Z_v1.0_20260307T100528Z",
+     "OPERA_L3_DISP-S1_IW_F10860_VV_20250910T123315Z_20251209T123416Z_v1.0_20260307T100528Z",
+     "OPERA_L3_DISP-S1_IW_F10860_VV_20251209T123416Z_20260321T123311Z_v1.0_20260817T212042Z"
+    ],
+    "chain": {
+     "20251209_20260321": 1,
+     "20250910_20251209": 1,
+     "20250910_20251028": -1
+    },
+    "incidence_deg": [
+     31.200000762939453,
+     46.20000076293945
+    ]
+   }
+  },
+  "ramp_removed": {
+   "n_cells": 13235,
+   "r": 0.869,
+   "rms_cm": 1.46,
+   "mean_diff_cm": 0.02,
+   "slope": 0.81,
+   "slope_ci": [
+    0.78,
+    0.83
+   ],
+   "plane_span_cm": 4.1,
+   "note": "best-fit plane of (ours - OPERA) over cells outside the bowls (both > -2 cm), 3-sigma clipped, removed from ours"
+  },
+  "bowl": {
+   "n_cells": 1762,
+   "r": 0.881,
+   "rms_cm": 1.78,
+   "mean_diff_cm": 0.47,
+   "slope": 0.88,
+   "slope_ci": [
+    0.86,
+    0.91
+   ],
+   "note": "cells where either map is below -3 cm (after ramp removal); depth check",
+   "median_ours_cm": -5.2,
+   "median_opera_cm": -6.22,
+   "ratio_of_sums": 0.93
+  },
+  "period": [
+   "20251030",
+   "20260323"
+  ],
+  "quantity": "vertical-equivalent cumulative change, OPERA full displacement layer (no filter)",
+  "gps": [
+   {
+    "id": "MMX1",
+    "gps_up_change_cm": -9.6,
+    "gps_to": "20260311",
+    "opera_cm": -11.21,
+    "ours_cm": -9.87
+   }
+  ]
+ }
+}

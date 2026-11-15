@@ -1,0 +1,10 @@
+tiles/{z}/{x}/{y}.png  (Web Mercator XYZ, z0-6, 624 tiles, ~0.4 MB; empty tiles not written)
+
+Derived from: Hasan, M.F., Smith, R., Vajedian, S., Pommerenke, R., Majumdar, S. (2023). Global land subsidence mapping
+reveals widespread loss of aquifer storage capacity. Nature Communications 14, 6180. doi:10.1038/s41467-023-41933-z
+Data: HydroShare doi:10.4211/hs.dc7c5bfb3a86479b889d3b30ab0e4ef7, file Prediction_results.zip ->
+Final_subsidence_proba_greater_1cm_2013_2019.tif (0.02 deg, EPSG:4326, probability 0-1). Licence CC BY 4.0.
+
+Processing (2026-11-14): nearest-neighbour reprojection to Web Mercator, max-pooling of classes at low zoom,
+5 classes (0.40/0.50/0.60/0.75/0.90) with baked-in alpha; < 0.40 and no-data transparent.
+Modelled likelihood of groundwater-driven subsidence, NOT a measurement. Legend + caveats: site/data/global_layer.js.

@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Groundline: a sinking-ground map from NASA's newest radar</title>
+<meta name="description" content="Groundline turns NASA-ISRO NISAR radar into a sinking-ground map anyone can open, that only counts what it can confirm.">
+<script>
+  // Theme before first paint. Stored choice wins; otherwise follow the system.
+  (function () {
+    var t = null;
+    try { t = localStorage.getItem('groundline-theme'); } catch (e) {}
+    if (t !== 'light' && t !== 'dark') t = window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    document.documentElement.setAttribute('data-theme', t);
+    document.documentElement.setAttribute('data-mode', 'site');
+  })();
+</script>
+<link rel="icon" href="data:,">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@500;600;700&family=Inter:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <pattern id="coverHatch" patternUnits="userSpaceOnUse" width="9" height="9" patternTransform="rotate(45)">
+      <rect width="9" height="9" fill="rgba(255,255,255,0.06)"/><line x1="0" y1="0" x2="0" y2="9" stroke="rgba(255,255,255,0.4)" stroke-width="1.6"/>
+    </pattern>
+    <!-- makes the optional model tiles readable on satellite imagery -->
+    <filter id="glBoost" color-interpolation-filters="sRGB" x="0" y="0" width="100%" height="100%">
+      <feMorphology id="glDilate" operator="dilate" radius="0.8"/>
+      <feGaussianBlur id="glBlur" stdDeviation="1.4"/>
+      <feComponentTransfer><feFuncA type="linear" slope="3.4"/></feComponentTransfer>
+    </filter>
+  </defs>
+</svg>
+
+<div class="app" id="top">
+
+<header class="top">
+  <a class="brand" href="#start" id="brand" aria-label="Groundline, back to the start">
+    <svg viewBox="0 0 40 24" width="34" height="20" aria-hidden="true"><path d="M1 6h10c4 0 4 12 9 12s5-7 9-7h10" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"/><path d="M1 6h38" fill="none" stroke="currentColor" stroke-width="1.2" stroke-dasharray="2 3" opacity=".55"/></svg>
+    <span>Groundline</span>
+  </a>
+  <nav class="acts" id="acts" aria-label="Main views">
+    <button type="button" data-act="sjv"><b>California</b></button>
+    <button type="button" data-act="world"><b>World</b></button>
+    <button type="button" data-act="mexico_city"><b>Mexico City</b></button>
+  </nav>
+  <label class="places"><span class="visually-hidden">Open any place</span><select id="placeSelect"></select></label>
+  <button id="themeBtn" class="ghost" type="button" aria-label="Switch between light and dark theme">Dark</button>
+</header>
+
+<section class="hero" aria-live="polite">
+  <h1 id="headline">A sinking-ground map from NASA's newest radar that only counts what it can confirm.</h1>
+</section>
+
+<main class="stage">
+  <div class="mapcol">
+    <div class="mapwrap" id="mapWrap">
+      <div id="map" class="map" role="application" aria-label="Map of how far the ground moved"></div>
+      <div id="map3d" class="map map3d" hidden><div class="labels3d" id="labels3d" aria-hidden="true"></div></div>
+      <div id="worldMap" class="map worldmap" role="application" aria-label="World map of places with sinking ground"></div>
+      <div class="map-tools">
+        <div class="seg" id="viewToggle" role="group" aria-label="Map view" hidden></div>
+        <span class="seg" id="mode3d" role="group" aria-label="What height shows in 3D" hidden>
+          <button type="button" data-mode3d="depth" aria-pressed="true">Sinking depth</button>
+          <button type="button" data-mode3d="terrain" aria-pressed="false">Real terrain</button>
+        </span>
+        <label class="shade" id="shadeBox" hidden><input type="checkbox" id="shadeToggle" checked> Filter out farmland</label>
+      </div>
+      <div class="legend" id="legend"></div>
+      <div class="wlegend" id="worldLegend"></div>
+      <p class="map-note" id="mapNote" hidden></p>
+    </div>
+    <div class="timebar" id="timebar">
+      <button id="playBtn" class="play" type="button" aria-label="Play the time series">&#9654;</button>
+      <div class="time-main">
+        <label for="dateSlider" class="time-label"><span id="dateLabel">&ndash;</span> <span class="muted" id="dateSub"></span></label>
+        <input id="dateSlider" type="range" min="0" max="1" step="1" value="1">
+      </div>
+    </div>
+  </div>
+
+  <aside class="panel" id="panel">
+    <!-- one place -->
+    <div class="site-panel" id="sitePanel">
+      <p class="status" id="statusChip"></p>
+      <div class="place-kicker" id="placeKicker"></div>
+      <h2 class="place-title" id="placeTitle"></h2>
+      <p class="caveat" id="placeCaveat" hidden></p>
+      <div class="steps" id="steps" role="group" aria-label="Guided steps"></div>
+      <div class="box" id="stepBox" aria-live="polite"></div>
+      <div class="box detail" id="detail" aria-live="polite" hidden></div>
+      <section class="box impact" id="impact" aria-label="Who lives on sinking ground" hidden></section>
+
+      <details class="more" id="more">
+        <summary>Details and limits</summary>
+        <div class="more-body">
+          <div id="stepNotes"></div>
+          <h3>How far to trust this map</h3>
+          <p class="site-status" id="siteStatus"></p>
+          <div id="trustDetail"></div>
+
+          <h3>Look up a station, a line or a place</h3>
+          <label class="picker"><span class="visually-hidden">Choose a station or a line</span><select id="picker"></select></label>
+          <p class="small muted">Or click anywhere on the map to read the history of that spot.</p>
+
+          <h3>Map options</h3>
+          <div class="layer-row" id="layerRow"></div>
+          <div class="controls3d" id="controls3d" hidden>
+            <div class="layer-row">
+              <label class="chip range">Height stretch <input id="exag" type="range" min="0.25" max="3" step="0.05" value="1"></label>
+              <label class="chip"><input id="flatten" type="checkbox" checked> Smoothed surface</label>
+              <button id="reset3d" class="chip" type="button">Reset view</button>
+            </div>
+            <p class="caption3d" id="caption3d" aria-live="polite"></p>
+            <p class="small muted">Drag to rotate. Click the surface or a station to read it. Scroll to zoom once the view has been clicked; pinch on a touch screen.</p>
+          </div>
+          <p class="small" id="measureNote"></p>
+
+          <h3>What we measured</h3>
+          <ul class="results" id="results"></ul>
+          <p class="small muted" id="resultsNote"></p>
+
+          <div id="contextPanel">
+            <h3>Why it matters here</h3>
+            <ul class="facts">
+              <li>Sinking ground has cut the Friant-Kern Canal's capacity by <strong>more than 60%</strong> along a <strong>33-mile stretch</strong>, from about Pixley to the Kern County line.
+                <a class="src" href="https://sjvwater.org/slew-of-lawsuits-between-friant-water-authority-and-its-own-members-settled-in-one-fell-swoop/" rel="noopener">SJV Water</a></li>
+              <li>Design capacity <strong>4,000 cubic feet per second</strong> versus about <strong>1,600</strong>.
+                <a class="src" href="https://www.usbr.gov/mp/sccao/fkc-fr.html" rel="noopener">U.S. Bureau of Reclamation</a></li>
+              <li>Repairing 10 miles (Phase 1) cost <strong>$326 million</strong>, as reported.
+                <a class="src" href="https://sjvwater.org/slew-of-lawsuits-between-friant-water-authority-and-its-own-members-settled-in-one-fell-swoop/" rel="noopener">SJV Water</a></li>
+              <li>The State Water Board <strong>may vote in April 2027</strong> on a <strong>proposed</strong> pumping moratorium within two miles of the canal in southern Tulare County. It is a proposal and has not been adopted.
+                <a class="src" href="https://sjvwater.org/state-poised-to-nix-pumping/" rel="noopener">SJV Water</a></li>
+              <li>California's Department of Water Resources publishes Sentinel-1 radar subsidence maps at <strong>100 m</strong>, <strong>quarterly</strong>. That is the State map we compare with.
+                <a class="src" href="https://catalog.data.gov/dataset/tre-altamira-insar-subsidence-data" rel="noopener">data.gov</a></li>
+            </ul>
+          </div>
+
+          <h3>Radar passes behind this map</h3>
+          <div class="fresh-grid">
+            <div id="freshUsed" class="fresh-card"></div>
+            <div id="freshLive" class="fresh-card"></div>
+            <div id="freshState" class="fresh-card"></div>
+          </div>
+          <div id="freshTimeline" class="timeline"></div>
+
+          <h3>How it works</h3>
+          <ol class="how-steps">
+            <li><b>Find</b> every NISAR radar pair over the place in NASA's Alaska Satellite Facility catalogue.</li>
+            <li><b>Read</b> just the area needed from each radar product, with its own corrections and quality layers.</li>
+            <li><b>Clean</b>: remove the upper-atmosphere effect, drop cells where the signal is unreliable, take out leftover tilts.</li>
+            <li><b>Stack</b> the 12-day pairs into a time series with an uncertainty for every cell.</li>
+            <li><b>Check</b> against GPS stations and, where they exist, NASA's OPERA product and official maps.</li>
+            <li><b>Publish</b> dated map layers and a small data file that this page reads.</li>
+          </ol>
+
+          <h3>What this can and cannot tell you</h3>
+          <ul class="limits">
+            <li><strong>It reads too deep over cropland.</strong> In California, fields read about 4 cm lower than the town they surround, in 32 of 32 towns, and the extra signal follows the crop calendar. It is a crop-related radar effect, not confirmed sinking; the exact mechanism is not identified. We shade cropland there and do not count it. The same may apply to every place not yet checked.</li>
+            <li><strong>Slanted view, not true vertical.</strong> The radar measures along its slanted line of sight. Vertical is roughly that divided by 0.77, with an assumed viewing angle. <span id="limitQuantity"></span></li>
+            <li><strong>Coarse cells, simple corrections.</strong> Cells are about 240 to 900 m. No weather model is used. San Joaquin comes from an earlier export built from preview pictures.</li>
+            <li><strong>It over-reads at slowly moving stations.</strong> <span id="limitOverread"></span></li>
+            <li><strong>Against California's State map.</strong> <span id="limitState"></span></li>
+            <li><strong>It fails where motion is slow or the air is humid.</strong> We tried Houston and Jakarta: not detected.</li>
+            <li><strong>Short record.</strong> Data for many regions begins in mid-June 2026.</li>
+            <li><strong>Not for design or enforcement.</strong> Use it to decide where to look and whom to call, then confirm with surveyed data and official products.</li>
+          </ul>
+
+          <h3>Sources and credits</h3>
+          <p class="small">Radar: NISAR (NASA/ISRO) L2 GUNW products (preview images for San Joaquin) via the <a href="https://search.asf.alaska.edu/" rel="noopener">ASF DAAC</a>. GPS: <a href="https://geodesy.unr.edu/" rel="noopener">Nevada Geodetic Laboratory</a>. Comparison maps: <a href="https://www.jpl.nasa.gov/go/opera/products/disp-product-suite/" rel="noopener">NASA OPERA DISP-S1</a> and <a href="https://catalog.data.gov/dataset/tre-altamira-insar-subsidence-data" rel="noopener">California DWR InSAR</a>. Cropland: <a href="https://www.nass.usda.gov/Research_and_Science/Cropland/SARS1a.php" rel="noopener">USDA Cropland Data Layer 2025</a>. Elevation in the 3D view: <a href="https://registry.opendata.aws/terrain-tiles/" rel="noopener">Terrain Tiles</a> (Mapzen, hosted by AWS Open Data), built from <a href="https://github.com/tilezen/joerd/blob/master/docs/attribution.md" rel="noopener">SRTM (NASA), GMTED2010 and 3DEP (USGS), ETOPO1 (NOAA), INEGI and other sources</a>. Satellite imagery: &copy; <a href="https://www.esri.com/" rel="noopener">Esri</a>, Maxar, Earthstar Geographics, and the GIS User Community. Grey base map: Esri Light and Dark Gray Canvas, &copy; Esri, HERE, Garmin, &copy; <a href="https://www.openstreetmap.org/copyright" rel="noopener">OpenStreetMap</a> contributors. Lines, airports and place names: &copy; OpenStreetMap contributors (ODbL). Population: <a href="https://human-settlement.emergency.copernicus.eu/ghs_pop2023.php" rel="noopener">GHS-POP R2023A</a>, European Commission JRC (CC BY 4.0). Model layer on the world map: <a href="https://doi.org/10.1038/s41467-023-41933-z" rel="noopener">Hasan et al. 2023</a> (CC BY 4.0; a model, not a measurement). Service outlines approximated from <a href="https://www.naturalearthdata.com/" rel="noopener">Natural Earth</a>. 3D view: <a href="https://threejs.org/" rel="noopener">three.js</a> (MIT).</p>
+          <p class="small">Built for NASA Space Apps 2026, challenge <em>Dancing with the SARs</em>. Not affiliated with or endorsed by any agency. Code and analysis were produced with an AI coding assistant under the team's direction; see the README. <a href="classic.html">Open the earlier, detailed version of this page</a>.</p>
+          <p class="small muted" id="buildInfo"></p>
+        </div>
+      </details>
+    </div>
+
+    <!-- the world -->
+    <div class="world-panel" id="worldPanel">
+      <h2 class="place-title" id="worldTitle">It runs anywhere</h2>
+      <div class="world-impact" id="worldImpact"></div>
+      <div id="worldCard" class="world-card"></div>
+      <details class="more" id="worldMore">
+        <summary>All places and map options</summary>
+        <div class="more-body">
+          <div id="worldNotes"></div>
+          <div id="worldOptions"></div>
+          <div id="worldList" class="world-list"></div>
+          <p class="small"><a href="classic.html">Open the earlier, detailed version of this page</a></p>
+        </div>
+      </details>
+    </div>
+  </aside>
+</main>
+
+<footer class="tourbar" id="tourbar" aria-label="Guided tour">
+  <button type="button" class="tour-btn" id="tourBack" aria-label="Previous step">&#8592; <span>Back</span></button>
+  <div class="tour-mid">
+    <div class="tour-meta"><span id="tourCount"></span><span class="tour-dots" id="tourDots" aria-hidden="true"></span><span class="tour-keys">use &#8592; &#8594; keys</span></div>
+    <p class="tour-caption" id="tourCaption" aria-live="polite"></p>
+  </div>
+  <button type="button" class="tour-btn next" id="tourNext" aria-label="Next step"><span>Next</span> &#8594;</button>
+</footer>
+
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="data/manifest.js"></script>
+<script src="loader.js"></script>
+</body>
+</html>

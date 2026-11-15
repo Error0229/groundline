@@ -1,0 +1,22 @@
+# Downloaded inputs are never committed: previews are large and can always be fetched again.
+pipeline/cache/
+pipeline/out/
+pipeline/out_v2/
+*.part
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Editors and operating systems
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Local-only working copies: not part of the published project.
+site_backup_before_rebuild/
+screenshots/
+present/
